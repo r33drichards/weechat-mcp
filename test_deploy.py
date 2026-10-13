@@ -33,6 +33,13 @@ AUTH_ENV = {
     "PORT": "4321",
 }
 ALL_ENV = {**POMERIUM_ENV, **AUTH_ENV}
+PRIVATE_POMERIUM_ENV = {
+    key: value for key, value in POMERIUM_ENV.items() if key != "MCP_AUTH_TOKEN"
+} | {
+    "MCP_AUTH_MODE": "railway-private",
+    "RAILWAY_ENVIRONMENT_ID": "synthetic-environment",
+    "RAILWAY_SERVICE_ID": "synthetic-pomerium-service",
+}
 SYNTHETIC_SECRETS = {
     name: "synthetic-" + name.lower().replace("_", "-") + "-tests-only-12345"
     for name in entrypoint.SECRETS
@@ -73,6 +80,19 @@ class RendererTests(unittest.TestCase):
         for text in files.values():
             self.assertNotIn("@@", text)
 
+    def test_dex_public_client_requires_s256_and_exact_callback(self):
+        dex = self.render()["dex.yaml"]
+        self.assertIn("    public: true", dex)
+        self.assertNotIn("secretEnv:", dex)
+        self.assertIn("  grantTypes: [authorization_code, refresh_token]", dex)
+        self.assertIn(
+            "  pkce:\n    enforce: true\n    codeChallengeMethodsSupported: [S256]", dex
+        )
+        self.assertEqual(
+            dex.count('      - "https://auth.example.test/oauth2/callback"'), 1
+        )
+        self.assertNotIn("localhost", dex)
+
     def test_dex_and_health_listeners_are_loopback_only(self):
         files = self.render()
         self.assertIn("web:\n  http: 127.0.0.1:5556\n", files["dex.yaml"])
@@ -102,6 +122,46 @@ class RendererTests(unittest.TestCase):
         self.assertNotIn(POMERIUM_ENV["MCP_AUTH_TOKEN"], rendered)
         self.assertNotIn(POMERIUM_ENV["OWNER_EMAIL"], rendered)
         self.assertNotIn(POMERIUM_ENV["BACKEND_ORIGIN"], rendered)
+
+    def test_private_mode_omits_bearer_and_keeps_owner_only_oauth(self):
+        baseline = self.render("pomerium", POMERIUM_ENV)["pomerium.yaml"]
+        for env in (
+            PRIVATE_POMERIUM_ENV,
+            {**PRIVATE_POMERIUM_ENV, "MCP_AUTH_TOKEN": "unused-token"},
+        ):
+            with self.subTest(env=env):
+                pomerium = self.render("pomerium", env)["pomerium.yaml"]
+                self.assertEqual(
+                    pomerium,
+                    baseline.replace(
+                        renderer.backend_headers(
+                            POMERIUM_ENV, POMERIUM_ENV["BACKEND_ORIGIN"]
+                        ),
+                        "    remove_request_headers: [Authorization]",
+                    ),
+                )
+                self.assertNotIn("set_request_headers:", pomerium)
+                self.assertNotIn("Bearer ", pomerium)
+                self.assertNotIn("unused-token", pomerium)
+
+    def test_private_mode_rejects_missing_runtime_and_nonprivate_backends(self):
+        for key in ("RAILWAY_ENVIRONMENT_ID", "RAILWAY_SERVICE_ID", "MCP_AUTH_MODE"):
+            env = dict(PRIVATE_POMERIUM_ENV)
+            del env[key]
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                renderer.configuration("pomerium", env)
+        for key, value in (
+            ("MCP_AUTH_MODE", "none"),
+            ("MCP_AUTH_MODE", ""),
+            ("MCP_AUTH_MODE", "bearer"),
+            ("RAILWAY_ENVIRONMENT_ID", " "),
+            ("BACKEND_ORIGIN", "http://bridge.up.railway.app:8000"),
+            ("BACKEND_ORIGIN", "http://bridge.railway.internal.attacker.test:8000"),
+            ("BACKEND_ORIGIN", "http://127.0.0.1:8000"),
+            ("BACKEND_ORIGIN", "http://[::1]:8000"),
+        ):
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                renderer.configuration("pomerium", {**PRIVATE_POMERIUM_ENV, key: value})
 
     def test_pomerium_does_not_require_auth_router_inputs_or_dns(self):
         with patch.object(renderer, "resolver_addresses") as resolvers:
@@ -220,6 +280,11 @@ class RendererTests(unittest.TestCase):
             "pomerium.yaml"
         ]
         self.assertIn("is: " + json.dumps(owner), pomerium)
+
+    def test_owner_cannot_introduce_raw_header_template_placeholder(self):
+        for base in (POMERIUM_ENV, PRIVATE_POMERIUM_ENV):
+            with self.subTest(env=base), self.assertRaises(ValueError):
+                self.render("pomerium", {**base, "OWNER_EMAIL": "@@BACKEND_HEADERS@@"})
 
     def test_private_directory_and_file_permissions_even_when_preexisting(self):
         self.output.mkdir(mode=0o755)
@@ -564,7 +629,7 @@ class EntrypointTests(unittest.TestCase):
         self.assertEqual(router_command[-2:], ["-g", "daemon off;"])
         self.assertEqual(
             set(dex_env) & entrypoint.SECRETS,
-            {"GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET", "POMERIUM_CLIENT_SECRET"},
+            {"GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"},
         )
         self.assertFalse(set(router_env) & entrypoint.SECRETS)
         self.assertEqual(check.call_args.kwargs, {"env": router_env, "check": True})
@@ -588,7 +653,7 @@ class EntrypointTests(unittest.TestCase):
         self.assertEqual(command[:2], ["pomerium", "--config"])
         self.assertEqual(
             set(env) & entrypoint.SECRETS,
-            {"SHARED_SECRET", "COOKIE_SECRET", "SIGNING_KEY", "IDP_CLIENT_SECRET"},
+            {"SHARED_SECRET", "COOKIE_SECRET", "SIGNING_KEY"},
         )
 
     def test_failed_nginx_validation_does_not_spawn_services(self):

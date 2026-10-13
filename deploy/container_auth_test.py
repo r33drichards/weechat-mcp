@@ -19,7 +19,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import urlencode, urljoin, urlsplit
+from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 
 AUTH = "auth-test.up.railway.app"
 MCP = "mcp-test.up.railway.app"
@@ -41,6 +41,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix="auth-container-test-") as directory:
         fixtures = Path(directory)
         fixtures.chmod(0o755)
+        pkce_probe = fixtures / "dex_pkce_test.py"
+        shutil.copyfile(root / "deploy/dex_pkce_test.py", pkce_probe)
+        pkce_probe.chmod(0o644)
         cert, key = fixtures / "ca.pem", fixtures / "key.pem"
         subprocess.run(
             [
@@ -66,22 +69,18 @@ def main():
         )
         cert.chmod(0o644)
         key.chmod(0o644)  # Synthetic ephemeral test key only, readable by UID 10001.
-        secret = base64.b64encode(secrets.token_bytes(32)).decode()
-        backend_token = secrets.token_urlsafe(32)
-        idp_secret = secrets.token_urlsafe(32)
         common = {
             "AUTH_ORIGIN": "https://" + AUTH,
             "MCP_ORIGIN": "https://" + MCP,
             "OWNER_EMAIL": "owner@example.test",
             "OWNER_GITHUB_ID": "12345678",
-            "BACKEND_ORIGIN": "http://127.0.0.1:9",
-            "MCP_AUTH_TOKEN": backend_token,
+            "BACKEND_ORIGIN": "http://bridge.railway.internal:8000",
+            "MCP_AUTH_MODE": "railway-private",
+            "POMERIUM_LOCAL_KEYS": "true",
+            "RAILWAY_ENVIRONMENT_ID": "synthetic-environment",
+            "RAILWAY_SERVICE_ID": "synthetic-auth-topology",
             "POMERIUM_INTERNAL_ORIGIN": "http://pomerium:8080",
             "PORT": "8080",
-            "SHARED_SECRET": secret,
-            "COOKIE_SECRET": secret,
-            "IDP_CLIENT_SECRET": idp_secret,
-            "POMERIUM_CLIENT_SECRET": idp_secret,
             "GITHUB_CLIENT_ID": "synthetic-client",
             "GITHUB_CLIENT_SECRET": "synthetic-secret",
             "SSL_CERT_FILE": "/fixtures/ca.pem",
@@ -214,10 +213,14 @@ http {{
                 ),
                 ("-e", "stderr", "-c", "/fixtures/edge.conf", "-g", "daemon off;"),
             )
-            published = docker(
-                "port", gateway, "443/tcp", capture_output=True
-            ).stdout.strip()
-            port = int(published.rsplit(":", 1)[1])
+
+            def gateway_port():
+                published = docker(
+                    "port", gateway, "443/tcp", capture_output=True
+                ).stdout.strip()
+                return int(published.rsplit(":", 1)[1])
+
+            port = gateway_port()
             context = ssl.create_default_context(cafile=str(cert))
 
             def request(url, method="GET", data=None, headers=None):
@@ -241,7 +244,6 @@ http {{
                     result.read(),
                 )
                 conn.close()
-                assert backend_token.encode() not in payload
                 return status, response_headers, payload
 
             def wait_ready():
@@ -313,6 +315,33 @@ assert (s.st_uid, s.st_gid, s.st_mode & 0o777) == (10001, 10001, 0o700)
             print(
                 "PASS root-owned empty volume boot; all service process identities are non-root"
             )
+            docker(
+                "exec",
+                "--user",
+                "10001:10001",
+                auth,
+                "python",
+                "/fixtures/dex_pkce_test.py",
+                "--deployment-root",
+                "/app",
+            )
+
+            def persisted_key_digest():
+                return docker(
+                    "exec",
+                    "--user",
+                    "10001:10001",
+                    pom,
+                    "python",
+                    "-c",
+                    "import hashlib; from pathlib import Path; "
+                    "p=Path('/data/pomerium-keys/keys.json'); s=p.stat(); "
+                    "assert (s.st_uid,s.st_gid,s.st_mode & 0o777)==(10001,10001,0o600); "
+                    "print(hashlib.sha256(p.read_bytes()).hexdigest())",
+                    capture_output=True,
+                ).stdout.strip()
+
+            original_keys = persisted_key_digest()
             discovery = json.loads(body)
             assert discovery["issuer"] == "https://" + AUTH + "/dex"
             status, _, body = request(discovery["jwks_uri"])
@@ -383,6 +412,13 @@ assert (s.st_uid, s.st_gid, s.st_mode & 0o777) == (10001, 10001, 0o700)
                     next_url = urljoin(url, response_headers["Location"])
                     parsed = urlsplit(next_url)
                     if parsed.hostname == AUTH and parsed.path.startswith("/dex/auth"):
+                        query = parse_qs(parsed.query)
+                        assert query["code_challenge_method"] == ["S256"]
+                        assert len(query["code_challenge"][0]) >= 43
+                        assert query["client_id"] == ["pomerium"]
+                        assert query["redirect_uri"] == [
+                            "https://" + AUTH + "/oauth2/callback"
+                        ]
                         assert cookies, "Expected authentication/CSRF cookies"
                         return cookies
                     url = next_url
@@ -451,6 +487,8 @@ assert (s.st_uid, s.st_gid, s.st_mode & 0o777) == (10001, 10001, 0o700)
             # nginx resolves the fixture service IPs at startup; recreation may
             # assign different IPs. Production auth routing uses a runtime resolver.
             docker("restart", gateway, stdout=subprocess.DEVNULL)
+            # Docker can allocate a new ephemeral host port after a restart.
+            port = gateway_port()
             wait_ready()
             for name in (auth, pom):
                 check_processes(name)
@@ -471,6 +509,9 @@ assert (s.st_uid, s.st_gid, s.st_mode & 0o777) == (10001, 10001, 0o700)
             start_oidc(
                 authorization_url
             )  # The original DCR client must remain registered.
+            assert persisted_key_digest() == original_keys, (
+                "Local session keys changed on restart"
+            )
             print(
                 "PASS container recreation: persistent markers, Dex keys and registered MCP client"
             )
@@ -512,8 +553,6 @@ assert (s.st_uid, s.st_gid, s.st_mode & 0o777) == (10001, 10001, 0o700)
                     text=True,
                 )
                 logs = result.stdout + result.stderr
-                for value in (secret, backend_token, idp_secret):
-                    logs = logs.replace(value, "[synthetic-redacted]")
                 print(f"{name}: {logs}")
             raise
         finally:

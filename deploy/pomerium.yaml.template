@@ -12,7 +12,9 @@ authenticate_service_url: @@AUTH_ORIGIN@@
 idp_provider: oidc
 idp_provider_url: @@DEX_ISSUER@@
 idp_client_id: pomerium
-# SHARED_SECRET, COOKIE_SECRET, SIGNING_KEY, IDP_CLIENT_SECRET: environment.
+# Public Dex client: pinned Pomerium uses S256 PKCE; no client secret.
+# SHARED_SECRET/COOKIE_SECRET: explicit environment or opt-in persistent local keys.
+# SIGNING_KEY is derived deterministically from SHARED_SECRET when omitted.
 databroker_storage_type: file
 databroker_storage_connection_string: file:///data/databroker
 runtime_flags:
@@ -35,9 +37,8 @@ routes:
                 is: @@OWNER_EMAIL@@
     preserve_host_header: true
     pass_identity_headers: true
-    # End-user OAuth terminates at Pomerium. The bridge independently checks
-    # this different private credential, overwritten on every proxied request.
-    set_request_headers:
-      Authorization: @@BACKEND_AUTHORIZATION@@
+    # End-user OAuth terminates at Pomerium. Default mode replaces Authorization
+    # with the bridge bearer; explicit railway-private mode removes it instead.
+@@BACKEND_HEADERS@@
     timeout: 0s
     idle_timeout: 0s

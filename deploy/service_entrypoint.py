@@ -9,6 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from pomerium_keys import LocalKeyError, pomerium_environment
 from render_config import render
 
 # Each process receives only the secrets it uses. Never log the environment.
@@ -24,10 +25,10 @@ SECRETS = {
 }
 
 
-def child_environment(allowed):
+def child_environment(allowed, env=None):
     return {
         key: value
-        for key, value in os.environ.items()
+        for key, value in (os.environ if env is None else env).items()
         if key not in SECRETS or key in allowed
     }
 
@@ -100,8 +101,8 @@ def main():
                                 "SHARED_SECRET",
                                 "COOKIE_SECRET",
                                 "SIGNING_KEY",
-                                "IDP_CLIENT_SECRET",
-                            }
+                            },
+                            pomerium_environment(os.environ),
                         ),
                     )
                 ]
@@ -121,7 +122,6 @@ def main():
                         {
                             "GITHUB_CLIENT_ID",
                             "GITHUB_CLIENT_SECRET",
-                            "POMERIUM_CLIENT_SECRET",
                         }
                     ),
                 ),
@@ -144,6 +144,9 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
+    except LocalKeyError as exc:
+        print(f"Pomerium local keys: {exc}", file=sys.stderr)
+        sys.exit(1)
     except (ValueError, OSError, subprocess.SubprocessError):
         # Upstream parsing errors can contain credentials: don't serialize exceptions.
         print(

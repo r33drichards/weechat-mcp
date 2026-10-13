@@ -1,13 +1,13 @@
 # Local validation: two-origin authentication layout
 
-Status as of 2026-10-13: locally prepared, not live-OAuth validated. No deployment,
-GitHub application creation, production credential use or publication is represented
-by this change.
+Status as of 2026-10-13: prepared for real-container CI, not live-OAuth validated.
+This file records source/test evidence; it does not establish deployment or live
+GitHub login. The PR checks must pass for the exact source revision being deployed.
 
 ## Passed
 
-- Real Dex v2.45.1, official static binary, SHA256
-  `217aa675738d1cbaf25fe8d7bc04cb00dbc60f91d8465b76b8d8af963d571337`.
+- Real Dex v2.46.0, official image binary, SHA256
+  `77731f0dd0603c14ab363dc127687c6b388ffa828b6d46368c9f4009d80ff183`.
   Real nginx 1.22.1-9+deb12u10 from official Debian bookworm-security, SHA256
   `62b20544dc6f509184ab550d15658bbc9fd18ca720235fda14eb8ef91e09d595`.
 - `deploy/auth_router_test.py` uses the actual templates, renderer, supervisor,
@@ -30,6 +30,19 @@ by this change.
 - Unit regressions cover strict interpolation, two distinct canonical origins,
   private/atomic outputs, symlink refusal, split service inputs/secret filtering,
   real subprocess failure/shutdown and mocked bounded kill escalation.
+
+- `deploy/dex_pkce_test.py` retains the production Dex template's public client,
+  exact HTTPS callback and mandatory S256 settings, replacing only the identity
+  connector with a synthetic callback and using isolated listeners/storage. Real
+  Dex rejects missing/plain PKCE, missing/wrong verifier and six incorrect callback
+  variants; both form client ID and Pomerium-style empty Basic secret exchanges pass.
+- Explicit Railway-private bridge mode has middleware regressions for tokenless
+  initialization, wrong Host/Origin denial, and unchanged default bearer rejection.
+  Its platform-marker checks do not prove that Railway ingress is absent.
+- Opt-in Pomerium local-key coverage includes private atomic persistence, eight
+  concurrent processes, stable-lock and fsync behavior, restart identity,
+  corruption/link/permission rejection, missing keys beside existing databroker
+  state, legacy override conflicts and credential-free errors.
 
 ## Verified source behavior
 
@@ -61,12 +74,16 @@ blocker, not evidence that Railway will fail or succeed.
 
 `deploy/container_auth_test.py` and the CI job are prepared but **not run here**.
 They build both actual images and use local TLS plus generated-style hostnames
-to exercise actual Pomerium/Envoy startup, MCP 401/discovery/DCR/PKCE start, initial
-OIDC redirects, secure host-only cookies, route isolation and shutdown. The
-script must pass in Docker-capable CI before source activation.
+to exercise Pomerium/Envoy startup, MCP 401/discovery/DCR/PKCE start, enforced Dex
+S256 and token exchange against a synthetic connector, initial OIDC redirects,
+secure host-only cookies, route isolation, root-owned empty volumes, non-root
+process identities, persistent keys/client registration across recreation and
+shutdown. The separate bridge Docker job exercises bearer and simulated
+Railway-private tokenless MCP/IRC roundtrips using one actual image. These scripts
+must pass in Docker-capable CI before source activation.
 
 Real GitHub consent/login, live identity claims, owner-vs-other-user authorization,
-OAuth token exchange, authorized backend header replacement, end-to-end MCP
+OAuth token exchange, authorized backend header removal in private mode (or replacement in bearer mode), end-to-end MCP
 streaming, Railway ingress/private DNS, persistence, and hard resource caps remain
 live acceptance gates. Do not describe the topology as fully validated until
 those gates pass.

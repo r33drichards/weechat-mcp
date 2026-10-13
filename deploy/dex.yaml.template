@@ -11,12 +11,16 @@ telemetry:
   http: 127.0.0.1:5558
 oauth2:
   responseTypes: [code]
+  grantTypes: [authorization_code, refresh_token]
+  pkce:
+    enforce: true
+    codeChallengeMethodsSupported: [S256]
   skipApprovalScreen: true
 enablePasswordDB: false
 staticClients:
   - id: pomerium
     name: WeeChat MCP
-    secretEnv: POMERIUM_CLIENT_SECRET
+    public: true
     redirectURIs:
       - @@AUTH_CALLBACK@@
 connectors:

@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 from urllib.parse import quote
 
@@ -159,21 +160,54 @@ class SharedSecretVerifier(TokenVerifier):
 
 
 def http_settings(env):
-    secret = env.get("MCP_AUTH_TOKEN", "")
-    if len(secret) < 32 or not secret.isascii() or any(c.isspace() for c in secret):
-        raise ValueError(
-            "HTTP requires MCP_AUTH_TOKEN of at least 32 non-space ASCII characters"
-        )
+    mode = env.get("MCP_AUTH_MODE", "bearer")
+    host = env.get("MCP_HOST", "127.0.0.1")
+    allowed_hosts = [
+        x.strip() for x in env.get("MCP_ALLOWED_HOSTS", "").split(",") if x.strip()
+    ]
+    if mode == "railway-private":
+        for name in ("RAILWAY_ENVIRONMENT_ID", "RAILWAY_SERVICE_ID"):
+            if not env.get(name, "").strip():
+                raise ValueError(f"railway-private mode requires {name}")
+        private_domain = env.get("RAILWAY_PRIVATE_DOMAIN", "")
+        if (
+            not re.fullmatch(
+                r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.railway\.internal",
+                private_domain,
+            )
+            or host != private_domain
+        ):
+            raise ValueError(
+                "railway-private requires MCP_HOST equal to RAILWAY_PRIVATE_DOMAIN"
+            )
+        if any(
+            env.get(name)
+            for name in ("RAILWAY_PUBLIC_DOMAIN", "RAILWAY_TCP_PROXY_DOMAIN")
+        ):
+            raise ValueError("railway-private bridge must have no public ingress")
+        if not allowed_hosts or any("*" in name for name in allowed_hosts):
+            raise ValueError("railway-private requires exact MCP_ALLOWED_HOSTS")
+        # These runtime guards cannot prove the platform's ingress configuration.
+        # The service must have no public domain or TCP proxy; see deploy/README.md.
+        auth = None
+    elif mode == "bearer":
+        secret = env.get("MCP_AUTH_TOKEN", "")
+        if len(secret) < 32 or not secret.isascii() or any(c.isspace() for c in secret):
+            raise ValueError(
+                "HTTP requires MCP_AUTH_TOKEN of at least 32 non-space ASCII characters"
+            )
+        auth = SharedSecretVerifier(secret)
+    else:
+        raise ValueError("MCP_AUTH_MODE must be bearer or railway-private")
     port = int(env.get("PORT", "8000"))
     if not 1 <= port <= 65535:
         raise ValueError("PORT must be between 1 and 65535")
-    return SharedSecretVerifier(secret), {
-        "host": env.get("MCP_HOST", "127.0.0.1"),
+    return auth, {
+        "host": host,
         "port": port,
         "path": "/mcp",
         "host_origin_protection": True,
-        "allowed_hosts": ["localhost:*", "127.0.0.1:*", "[::1]:*"]
-        + [x.strip() for x in env.get("MCP_ALLOWED_HOSTS", "").split(",") if x.strip()],
+        "allowed_hosts": ["localhost:*", "127.0.0.1:*", "[::1]:*"] + allowed_hosts,
         "stateless_http": False,
     }
 

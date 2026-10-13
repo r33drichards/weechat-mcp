@@ -101,7 +101,7 @@ Set `MCP_TRANSPORT=http` for FastMCP's native Streamable HTTP endpoint at `/mcp`
 Stdio remains the default. Protocol **2026-07-28** and stateful subscription streams
 are unchanged; this is not legacy SSE transport. `PORT` defaults to `8000`, and
 `MCP_HOST` defaults to `127.0.0.1`. For Docker port forwarding set `MCP_HOST=0.0.0.0`.
-HTTP startup fails closed without `MCP_AUTH_TOKEN` (at least 32 non-space ASCII
+Default `MCP_AUTH_MODE=bearer` startup fails closed without `MCP_AUTH_TOKEN` (at least 32 non-space ASCII
 characters). Supply a high-entropy runtime secret through your secret manager;
 clients send `Authorization: Bearer <token>`. This is single-owner backend
 protection, not an OAuth login service. Everyone with this secret shares one IRC
@@ -128,7 +128,10 @@ provision anything. Use one replica per IRC identity: state and subscriptions ar
 process-local, and replicas with the same nickname will collide.
 
 For the Pomerium → Dex → GitHub login pattern, see [deployment templates](deploy/README.md).
-The proxy injects the backend secret; external MCP clients do not receive it.
+The proxy injects the backend secret by default; external MCP clients do not
+receive it. The deployment guide also documents explicit `railway-private` mode,
+which omits this extra bearer only on a guarded private Railway bridge with no
+public ingress. Pomerium's owner-only GitHub/Dex authentication remains required.
 
 ### Container verification
 

@@ -3,6 +3,12 @@
 
 Docker (Linux host networking):
     uv run python docker_test.py --miniircd /path/to/miniircd
+    uv run python docker_test.py --miniircd /path/to/miniircd \
+        --skip-build --railway-private
+
+Private-mode Docker testing uses simulated Railway runtime variables and maps
+the private hostname to loopback inside the container. It is not live Railway
+networking, ingress, or Pomerium authentication validation.
 
 Same entrypoint/HTTP checks without Docker (does NOT validate the image):
     uv run python docker_test.py --host --miniircd /path/to/miniircd \
@@ -58,6 +64,11 @@ def arguments():
     parser.add_argument(
         "--skip-build", action="store_true", help="Test an already-built Docker image"
     )
+    parser.add_argument(
+        "--railway-private",
+        action="store_true",
+        help="Docker only: simulate Railway-private mode on isolated loopback",
+    )
     args = parser.parse_args()
     args.miniircd = args.miniircd.resolve()
     if not args.miniircd.is_file():
@@ -68,6 +79,8 @@ def arguments():
         parser.error("--loopback-ipc requires --host; Docker must test Unix IPC")
     if args.host and args.skip_build:
         parser.error("--skip-build is only meaningful in Docker mode")
+    if args.host and args.railway_private:
+        parser.error("--railway-private requires Docker's isolated hostname mapping")
     return args
 
 
@@ -140,9 +153,9 @@ class Processes:
 
     def logs(self, token):
         for path in sorted(self.work.glob("*.log")):
-            content = path.read_text(errors="replace")[-20000:].replace(
-                token, "[redacted]"
-            )
+            content = path.read_text(errors="replace")[-20000:]
+            if token:
+                content = content.replace(token, "[redacted]")
             print(f"\n--- {path.name} ---\n{content}", file=sys.stderr)
 
     def close(self):
@@ -256,20 +269,38 @@ async def exercise(irc_port, http_port, token, processes):
         "Accept": "application/json, text/event-stream",
         "MCP-Protocol-Version": PROTOCOL,
     }
-    async with httpx2.AsyncClient(timeout=10, trust_env=False) as unauthenticated:
-        for authorization in (None, "Bearer invalid-test-token"):
-            request_headers = dict(headers)
-            if authorization:
-                request_headers["Authorization"] = authorization
+    if token is None:
+        headers["Host"] = "mcp.example.test"
+        client_headers = {"Host": headers["Host"]}
+        async with httpx2.AsyncClient(timeout=10, trust_env=False) as unauthenticated:
             response = await unauthenticated.post(
                 url,
-                headers=request_headers,
+                headers={**headers, "Host": "wrong.example.test"},
                 json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
             )
-            assert response.status_code in (401, 403), (
-                f"Unauthorized request was not denied: {response.status_code}"
-            )
-    print("HTTP_MISSING_AND_WRONG_BEARER_DENIED_OK", flush=True)
+            assert response.status_code == 421, response.status_code
+        print("SIMULATED_RAILWAY_PRIVATE_WRONG_HOST_DENIED_OK", flush=True)
+    else:
+        client_headers = {"Authorization": "Bearer " + token}
+        async with httpx2.AsyncClient(timeout=10, trust_env=False) as unauthenticated:
+            for authorization in (None, "Bearer invalid-test-token"):
+                request_headers = dict(headers)
+                if authorization:
+                    request_headers["Authorization"] = authorization
+                response = await unauthenticated.post(
+                    url,
+                    headers=request_headers,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/list",
+                        "params": {},
+                    },
+                )
+                assert response.status_code in (401, 403), (
+                    f"Unauthorized request was not denied: {response.status_code}"
+                )
+        print("HTTP_MISSING_AND_WRONG_BEARER_DENIED_OK", flush=True)
 
     observer = await IRCObserver.connect(irc_port)
     runner = None
@@ -277,7 +308,7 @@ async def exercise(irc_port, http_port, token, processes):
         runner = Runner(processes.work / "host-turn.sqlite", "dockertest", max_turns=1)
         await observer.wait_for_weechat()
         async with httpx2.AsyncClient(
-            headers={"Authorization": "Bearer " + token},
+            headers=client_headers,
             timeout=httpx2.Timeout(20, read=30),
             trust_env=False,
         ) as http:
@@ -286,6 +317,9 @@ async def exercise(irc_port, http_port, token, processes):
                 transport, mode=PROTOCOL, cache=None, read_timeout_seconds=15
             ) as sdk:
                 assert sdk.session.protocol_version == PROTOCOL
+                if token is None:
+                    assert "Authorization" not in http.headers
+                    print("SIMULATED_RAILWAY_PRIVATE_NO_BEARER_MCP_OK", flush=True)
                 tools = await sdk.list_tools()
                 assert any(tool.name == "weechat_msg" for tool in tools.tools)
                 resources = await sdk.list_resources()
@@ -407,19 +441,36 @@ def main():
                 ["docker", "build", "-t", args.image, "."], cwd=REPO, check=True
             )
     irc_port, http_port = allocate_ports()
-    token = secrets.token_urlsafe(32)
+    token = None if args.railway_private else secrets.token_urlsafe(32)
     settings = {
         "MCP_TRANSPORT": "http",
+        "MCP_AUTH_MODE": "bearer",
         # Even in host-network Docker mode, keep this test listener private.
         "MCP_HOST": "127.0.0.1",
         "PORT": str(http_port),
-        "MCP_AUTH_TOKEN": token,
         "IRC_HOST": "127.0.0.1",
         "IRC_PORT": str(irc_port),
         "IRC_TLS": "false",
         "IRC_NICK": "dockertest",
         "IRC_CHANNELS": "#wchat",
     }
+    if args.railway_private:
+        settings.update(
+            MCP_AUTH_MODE="railway-private",
+            MCP_HOST="bridge.railway.internal",
+            MCP_ALLOWED_HOSTS="mcp.example.test",
+            RAILWAY_PRIVATE_DOMAIN="bridge.railway.internal",
+            RAILWAY_ENVIRONMENT_ID="synthetic-docker-environment",
+            RAILWAY_SERVICE_ID="synthetic-docker-bridge",
+        )
+        print(
+            "SIMULATED_RAILWAY_PRIVATE_MODE: synthetic runtime markers and "
+            "Docker-only loopback hostname mapping; live Railway NOT tested",
+            flush=True,
+        )
+    else:
+        assert token is not None
+        settings["MCP_AUTH_TOKEN"] = token
     with tempfile.TemporaryDirectory(prefix="weechat-docker-test-") as directory:
         work = Path(directory)
         processes = Processes(work)
@@ -439,6 +490,8 @@ def main():
             anyio.run(wait_port, irc_port, processes)
             env = dict(os.environ, **settings)
             env.pop("WEECHAT_MCP_LOOPBACK_PORT", None)
+            if args.railway_private:
+                env.pop("MCP_AUTH_TOKEN", None)
             if args.host:
                 env = host_environment(env, args.weechat_root, work)
                 env["TMPDIR"] = str(work)
@@ -461,6 +514,8 @@ def main():
                     "--name",
                     processes.container,
                 ]
+                if args.railway_private:
+                    command += ["--add-host", "bridge.railway.internal:127.0.0.1"]
                 for key in settings:
                     command += ["-e", key]
                 command += [args.image]
@@ -473,9 +528,14 @@ def main():
             raise
         finally:
             processes.close()
-    label = (
-        "HOST_ENTRYPOINT_HTTP_SMOKE_OK" if args.host else "DOCKER_IMAGE_HTTP_SMOKE_OK"
-    )
+    if args.railway_private:
+        label = "DOCKER_IMAGE_SIMULATED_RAILWAY_PRIVATE_HTTP_SMOKE_OK"
+    else:
+        label = (
+            "HOST_ENTRYPOINT_HTTP_SMOKE_OK"
+            if args.host
+            else "DOCKER_IMAGE_HTTP_SMOKE_OK"
+        )
     print(label, flush=True)
     return 0
 

@@ -13,5 +13,5 @@ RUN uv sync --locked --no-dev --no-editable --no-cache
 COPY bridge.py weechat_mcp.py container_entrypoint.py LICENSE ./
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
 USER weechat
-# Default MCP transport is stdio. HTTP is opt-in and requires runtime authentication.
+# HTTP requires a bearer unless explicitly using guarded Railway-private mode.
 ENTRYPOINT ["python", "/app/container_entrypoint.py"]

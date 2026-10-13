@@ -6,6 +6,8 @@ container builds, Railway ingress, or real GitHub login. Run separately from uni
 """
 
 import argparse
+import base64
+import hashlib
 import http.client
 import json
 import os
@@ -120,6 +122,7 @@ def main():
         thread = threading.Thread(target=upstream.serve_forever, daemon=True)
         thread.start()
         for name in (
+            "pomerium_keys.py",
             "render_config.py",
             "service_entrypoint.py",
             "dex.yaml.template",
@@ -151,7 +154,6 @@ def main():
             POMERIUM_INTERNAL_ORIGIN=f"http://[::1]:{upstream.server_port}",
             GITHUB_CLIENT_ID="synthetic-github-client",
             GITHUB_CLIENT_SECRET="synthetic-github-secret",
-            POMERIUM_CLIENT_SECRET="synthetic-client-secret",
         )
         log = root / "service.log"
         process = None
@@ -176,6 +178,12 @@ def main():
                     "response_type": "code",
                     "scope": "openid email profile",
                     "state": "synthetic-state",
+                    "code_challenge_method": "S256",
+                    "code_challenge": base64.urlsafe_b64encode(
+                        hashlib.sha256(b"synthetic-verifier-" * 4).digest()
+                    )
+                    .decode()
+                    .rstrip("="),
                 }
             )
             path = "/dex/auth?" + query

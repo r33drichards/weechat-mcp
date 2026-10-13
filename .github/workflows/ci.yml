@@ -78,7 +78,7 @@ jobs:
             --weechat-root / --miniircd .ci/miniircd/miniircd | tee integration.log
 
   docker:
-    name: Docker image and authenticated HTTP IRC roundtrip
+    name: Docker image and bearer/private HTTP IRC roundtrips
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -98,6 +98,8 @@ jobs:
       - run: uv sync --locked
       - name: Build actual image and exercise HTTP MCP against localhost IRC
         run: timeout 600s uv run --locked python docker_test.py --miniircd .ci/miniircd/miniircd
+      - name: Exercise same image with simulated Railway-private mode and no bearer
+        run: timeout 180s uv run --locked python docker_test.py --miniircd .ci/miniircd/miniircd --skip-build --railway-private
 
   auth_topology:
     name: Real Pomerium and Dex auth topology

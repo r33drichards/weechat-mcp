@@ -32,8 +32,10 @@ files from a backup before restarting. Do not mount one volume in both services.
 
 MCP clients connect to Pomerium. Pomerium owns MCP discovery, client registration,
 PKCE and client tokens. It delegates OIDC to Dex, which uses GitHub OAuth. Pomerium
-replaces upstream Authorization with the separate private bridge bearer token.
-The bridge validates that token and accepts only its configured public MCP Host.
+replaces upstream Authorization with the separate private bridge bearer token by
+default. Explicit `railway-private` mode removes that extra bearer and strips
+Authorization before proxying instead. The bridge keeps its Host/Origin allowlist
+in both modes. Public Pomerium owner-only GitHub/Dex authentication is unchanged.
 Do not also enable FastMCP GitHubProvider or Pomerium `upstream_oauth2`.
 
 Auth ingress maps `/dex` and `/dex/*` unchanged to loopback Dex. A pinned, exact
@@ -56,10 +58,13 @@ Pomerium service:
 - `AUTH_ORIGIN=https://<auth-generated-host>`; must differ from MCP origin
 - `BACKEND_ORIGIN=http://<bridge>.railway.internal:8000`
 - `OWNER_EMAIL`: exact owner email returned by Dex; verify the live claim
-- `MCP_AUTH_TOKEN`: at least 32 cryptographically random URL-safe characters,
-  identical to the bridge token
-- `SHARED_SECRET`, `COOKIE_SECRET`, `SIGNING_KEY`: Pomerium's documented key formats
-- `IDP_CLIENT_SECRET`: same value as auth's `POMERIUM_CLIENT_SECRET`
+- Default `MCP_AUTH_MODE=bearer`: `MCP_AUTH_TOKEN` is at least 32 cryptographically
+  random URL-safe characters, identical to the bridge token. For the private-only
+  bootstrap below, set `MCP_AUTH_MODE=railway-private` and omit `MCP_AUTH_TOKEN`.
+- `POMERIUM_LOCAL_KEYS=true`: generate separate session keys once on the private volume.
+  Omit `SHARED_SECRET`, `COOKIE_SECRET`, `SIGNING_KEY`, `IDP_CLIENT_SECRET` and their
+  `_FILE` overrides in this managed mode; see [key lifecycle](LOCAL_KEYS.md).
+- The Dex OIDC client is public and requires S256 PKCE; it has no shared client secret.
 
 Auth service:
 
@@ -67,16 +72,42 @@ Auth service:
 - `POMERIUM_INTERNAL_ORIGIN=http://<pomerium>.railway.internal:8080`
 - `PORT=8080`
 - `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`: dedicated GitHub OAuth app
-- `POMERIUM_CLIENT_SECRET`: same as Pomerium's `IDP_CLIENT_SECRET`
+- Do not set `POMERIUM_CLIENT_SECRET`: Dex 2.46.0 enforces S256 PKCE for the exact
+  registered Pomerium HTTPS callback, rejecting missing PKCE and plain challenges.
 
 Bridge service:
 
-- `MCP_TRANSPORT=http`, `PORT=8000`, `MCP_AUTH_TOKEN`
+- `MCP_TRANSPORT=http`, `PORT=8000`; bearer/private-mode settings as below
 - `MCP_ALLOWED_HOSTS=<MCP-generated-host>`
-- `MCP_HOST=::` for Railway private IPv6; verify resolution and bind reachability
-  from Pomerium before activation. Older Railway networks may be IPv6-only.
+- Bearer mode: `MCP_AUTH_TOKEN`, `MCP_HOST=::` for Railway private IPv6.
+- Private-only mode: `MCP_AUTH_MODE=railway-private`,
+  `MCP_HOST=${{RAILWAY_PRIVATE_DOMAIN}}`, and no `MCP_AUTH_TOKEN`. This binds the
+  service's own private DNS address rather than a wildcard/public interface.
+  Verify DNS resolution and bind reachability from Pomerium before activation.
 - The documented `IRC_*` settings. Use an isolated nickname/profile and only
   allowlisted channels. One process/replica; profile and chat history are ephemeral.
+
+### Private-only bootstrap prerequisite
+
+Set `MCP_AUTH_MODE=railway-private` on **both bridge and Pomerium**. Both require
+Railway's runtime `RAILWAY_ENVIRONMENT_ID` and `RAILWAY_SERVICE_ID`. Pomerium accepts
+only a `*.railway.internal` backend in this mode. The bridge requires its exact
+`RAILWAY_PRIVATE_DOMAIN` as `MCP_HOST` and a nonempty, wildcard-free
+`MCP_ALLOWED_HOSTS` list. It refuses startup when `RAILWAY_PUBLIC_DOMAIN` or
+`RAILWAY_TCP_PROXY_DOMAIN` is present.
+
+Before enabling this mode, verify in Railway that the bridge has **no generated
+domain, custom domain, or TCP proxy**. Code cannot prove remote ingress settings;
+runtime variables are only guardrails. Do not add public ingress later. All
+services in the Railway environment are inside the trust boundary and can reach
+this tokenless bridge if they supply an allowed Host. Keep that environment
+restricted to trusted services. The Host allowlist is not authentication.
+
+The public MCP endpoint remains Pomerium, with the same exact owner-email policy
+and GitHub/Dex OAuth. Three services, replicas, resource limits and the $75/month
+budget are unchanged. Outside this explicit mode, missing/invalid bearer tokens
+still fail closed. Pomerium's optional local session keys never leave its service.
+There is no cross-service secret exchange.
 
 Allocate both generated domains before registering the dedicated GitHub app:
 
@@ -90,6 +121,9 @@ both service callbacks. `chatgpt.com` and `claude.ai` are allowed client-metadat
 domains, not user access policies. Dynamic registration grants no chat access.
 
 ## Secret handling and lifecycle
+
+Optional [volume-local Pomerium keys](LOCAL_KEYS.md) are available with explicit
+`POMERIUM_LOCAL_KEYS=true`; the default remains externally supplied keys.
 
 Each image renders only its required runtime files into a private temporary
 0700 directory, with atomically replaced 0600 files. No production secrets belong
@@ -137,11 +171,15 @@ python3 deploy/auth_router_test.py --nginx /path/to/nginx \
 The Docker test is required before activating the source images. It does not
 replace live owner and other-user OAuth tests. Before exposing real chat data:
 
-1. Verify private backend missing/wrong token rejection and no public bypass.
+1. Verify the bridge has no public domains or TCP proxy and no public bypass.
+   In bearer mode, also verify missing/wrong token rejection. In private mode,
+   verify private-only bind/reachability, allowed-Host access without a token,
+   and wrong-Host rejection.
 2. Verify public unauthenticated MCP returns 401/discovery, with no tool data.
 3. Complete owner GitHub login, inspect exact email/subject, exchange PKCE token,
    initialize MCP and list tools. Verify an unapproved account is denied.
-4. Verify client identity/backend headers cannot override Pomerium's injected token.
+4. Verify client identity/backend headers cannot bypass Pomerium: Authorization
+   is replaced in bearer mode and absent at the bridge in private mode.
 5. Exercise actual subscriptions, idle/reconnect, methods and session headers
    through Railway and the target client.
 6. Restart both auth services; verify durable OAuth state and volume ownership.
@@ -156,3 +194,5 @@ replace live owner and other-user OAuth tests. Before exposing real chat data:
 - [Dex GitHub connector and callback](https://dexidp.io/docs/connectors/github/)
 - [nginx proxy behavior](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)
 - [Railway networking and domain behavior](https://docs.railway.com/networking/domains/working-with-domains)
+- [Railway private networking](https://docs.railway.com/networking/private-networking)
+- [Railway runtime variables](https://docs.railway.com/variables/reference)

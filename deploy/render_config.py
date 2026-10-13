@@ -61,6 +61,30 @@ def resolver_addresses(path=Path("/etc/resolv.conf")):
     return " ".join(addresses)
 
 
+def backend_headers(env, backend_origin):
+    mode = env.get("MCP_AUTH_MODE", "bearer")
+    if mode == "railway-private":
+        for name in ("RAILWAY_ENVIRONMENT_ID", "RAILWAY_SERVICE_ID"):
+            required(name, env)
+        if not re.fullmatch(
+            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.railway\.internal",
+            urlsplit(backend_origin).hostname or "",
+        ):
+            raise ValueError(
+                "railway-private requires a Railway-private BACKEND_ORIGIN"
+            )
+        # End-user OAuth terminates here. Never forward it to the private bridge.
+        return "    remove_request_headers: [Authorization]"
+    if mode != "bearer":
+        raise ValueError("MCP_AUTH_MODE must be bearer or railway-private")
+    token = required("MCP_AUTH_TOKEN", env)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{32,}", token):
+        raise ValueError("MCP_AUTH_TOKEN must have at least 32 URL-safe characters")
+    return "    set_request_headers:\n      Authorization: " + json.dumps(
+        "Bearer " + token
+    )
+
+
 def configuration(service, env):
     values = {"AUTH_ORIGIN": origin("AUTH_ORIGIN", env, True)}
     values["DEX_ISSUER"] = values["AUTH_ORIGIN"] + "/dex"
@@ -76,10 +100,7 @@ def configuration(service, env):
             c.isspace() for c in values["OWNER_EMAIL"]
         ):
             raise ValueError("OWNER_EMAIL must be the exact email returned by Dex")
-        token = required("MCP_AUTH_TOKEN", env)
-        if not re.fullmatch(r"[A-Za-z0-9_-]{32,}", token):
-            raise ValueError("MCP_AUTH_TOKEN must have at least 32 URL-safe characters")
-        values["BACKEND_AUTHORIZATION"] = "Bearer " + token
+        values["BACKEND_HEADERS"] = backend_headers(env, values["BACKEND_ORIGIN"])
     if service in ("all", "auth"):
         values["POMERIUM_INTERNAL_ORIGIN"] = origin("POMERIUM_INTERNAL_ORIGIN", env)
         values["AUTH_AUTHORITY"] = urlsplit(values["AUTH_ORIGIN"]).netloc
@@ -109,7 +130,13 @@ def render(service, env, output):
     for name in names:
         extension = "conf" if name == "router" else "yaml"
         text = (root / f"{name}.{extension}.template").read_text()
+        if name == "pomerium":
+            # Insert the fixed fragment before scalar interpolation, so user
+            # input cannot introduce a raw-fragment placeholder of its own.
+            text = text.replace("@@BACKEND_HEADERS@@", values["BACKEND_HEADERS"])
         for key, value in values.items():
+            if key == "BACKEND_HEADERS":
+                continue
             # Nginx interpolations are strict validated origins, authority, IPs, port.
             replacement = value if name == "router" else json.dumps(value)
             text = text.replace("@@" + key + "@@", replacement)
