@@ -86,3 +86,8 @@ A separate focused review found the dispatcher acknowledgement issue described
 above; it was fixed and the 26 manifest/source tests were rerun successfully.
 Docker image build/runtime was not rerun for this slice; the Dockerfile includes
 the new dependency-free compiler module and container unit checks are in the suite.
+
+PR CI follow-up: the first Docker build caught that `.dockerignore` excluded the
+new compiler module. Added the explicit build-context allowlist entry and a
+runtime-module packaging regression test. The updated local suite passes 148
+tests, plus Ruff, formatting and ty; the actual Docker CI job is rerun on the fix.
