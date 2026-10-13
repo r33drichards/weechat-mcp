@@ -11,5 +11,6 @@ WORKDIR /app
 COPY deploy/render_config.py deploy/service_entrypoint.py deploy/volume_entrypoint.py deploy/dex.yaml.template deploy/router.conf.template ./
 # Only volume initialization runs as root; the supervisor/services run as UID 10001.
 USER 0:0
+ENV HOME=/home/auth XDG_CACHE_HOME=/home/auth/.cache
 EXPOSE 8080
 ENTRYPOINT ["python", "-I", "/app/volume_entrypoint.py", "auth"]

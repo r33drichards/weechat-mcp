@@ -107,14 +107,14 @@ http {{
   ssl_certificate /fixtures/ca.pem;
   ssl_certificate_key /fixtures/key.pem;
   server_name {AUTH};
-  location / {{ proxy_pass http://auth:8080; proxy_set_header Host {AUTH}; proxy_set_header X-Forwarded-Proto https; proxy_buffering off; }}
+  location / {{ proxy_http_version 1.1; proxy_set_header Connection ""; proxy_pass http://auth:8080; proxy_set_header Host {AUTH}; proxy_set_header X-Forwarded-Proto https; proxy_buffering off; }}
  }}
  server {{
   listen 8443 ssl;
   ssl_certificate /fixtures/ca.pem;
   ssl_certificate_key /fixtures/key.pem;
   server_name {MCP};
-  location / {{ proxy_pass http://pomerium:8080; proxy_set_header Host {MCP}; proxy_set_header X-Forwarded-Proto https; proxy_buffering off; }}
+  location / {{ proxy_http_version 1.1; proxy_set_header Connection ""; proxy_pass http://pomerium:8080; proxy_set_header Host {MCP}; proxy_set_header X-Forwarded-Proto https; proxy_buffering off; }}
  }}
 }}""")
         edge.chmod(0o644)
