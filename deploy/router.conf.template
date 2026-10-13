@@ -1,0 +1,86 @@
+# TLS terminates at Railway. Public forwarding is limited to the auth surface.
+worker_processes 1;
+pid /tmp/weechat-auth-nginx.pid;
+error_log /dev/null;  # Nginx upstream errors otherwise log OAuth query credentials.
+events { worker_connections 512; }
+http {
+    access_log off;  # OAuth query strings, cookies and tokens must not enter logs.
+    server_tokens off;
+    client_max_body_size 1m;
+    client_body_temp_path /tmp/weechat-auth-body;
+    proxy_temp_path /tmp/weechat-auth-proxy;
+    fastcgi_temp_path /tmp/weechat-auth-fastcgi;
+    uwsgi_temp_path /tmp/weechat-auth-uwsgi;
+    scgi_temp_path /tmp/weechat-auth-scgi;
+    resolver @@DNS_RESOLVERS@@ valid=10s ipv6=on;
+    resolver_timeout 5s;
+
+    # Exact public Pomerium authentication paths, from pinned v0.33.3.
+    # MCP discovery/callback/admin namespaces intentionally have no entry.
+    map $uri $auth_upstream {
+        default "";
+        ~^/dex(?:/|$) http://127.0.0.1:5556;
+        / @@POMERIUM_INTERNAL_ORIGIN@@;
+        /oauth2/callback @@POMERIUM_INTERNAL_ORIGIN@@;
+        /robots.txt @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/ @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/sign_in @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/sign_out @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/signed_out @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/index.js @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/index.css @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/apple-touch-icon.png @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/favicon.ico @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/favicon-16x16.png @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/favicon-32x32.png @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/device-enrolled @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/session_binding_info @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/session_binding/revoke @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/identity_binding/revoke @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/verify-access-token @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.pomerium/verify-identity-token @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.well-known/pomerium @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.well-known/pomerium/ @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.well-known/pomerium/jwks.json @@POMERIUM_INTERNAL_ORIGIN@@;
+        /.well-known/pomerium/hpke-public-key @@POMERIUM_INTERNAL_ORIGIN@@;
+    }
+    server {
+        listen @@PORT@@;
+        listen [::]:@@PORT@@;
+        server_name _;
+        # Actual Host is fixed, not inferred from a caller-controlled forwarded header.
+        if ($http_host != "@@AUTH_AUTHORITY@@") { return 421; }
+        # Reject ambiguous raw path encodings/dot segments before URI normalization.
+        # Encoded OAuth query parameter values remain allowed.
+        if ($request_uri ~ "^[^?]*[%\\\\]") { return 400; }
+        if ($request_uri ~ "^[^?]*//") { return 400; }
+        if ($request_uri ~ "^[^?]*/\\.\\.?(?:/|\\?|$)") { return 400; }
+        if ($request_method = CONNECT) { return 405; }
+        location / {
+            if ($auth_upstream = "") { return 404; }
+            proxy_pass $auth_upstream;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host "@@AUTH_AUTHORITY@@";
+            proxy_set_header X-Forwarded-Host "@@AUTH_AUTHORITY@@";
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-Port 443;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header Forwarded "";
+            proxy_set_header X-Original-URL "";
+            proxy_set_header X-Rewrite-URL "";
+            proxy_set_header X-Pomerium-Reproxy-Policy "";
+            proxy_set_header X-Pomerium-Jwt-Assertion "";
+            proxy_ssl_server_name on;
+            proxy_ssl_verify on;
+            proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+            proxy_redirect off;
+            proxy_buffering off;
+            proxy_request_buffering off;
+            proxy_cache off;
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
+        }
+    }
+}

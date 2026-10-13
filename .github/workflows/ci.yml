@@ -76,3 +76,36 @@ jobs:
           set -o pipefail
           timeout 120s uv run --locked python live_test.py \
             --weechat-root / --miniircd .ci/miniircd/miniircd | tee integration.log
+
+  docker:
+    name: Docker image and bearer/private HTTP IRC roundtrips
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.23"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Check out pinned official miniircd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrosdahl/miniircd
+          ref: 42a8f800dc77d9106fe9a753c81299e8cabf5de3
+          path: .ci/miniircd
+          persist-credentials: false
+      - run: uv sync --locked
+      - name: Build actual image and exercise HTTP MCP against localhost IRC
+        run: timeout 600s uv run --locked python docker_test.py --miniircd .ci/miniircd/miniircd
+      - name: Exercise same image with simulated Railway-private mode and no bearer
+        run: timeout 180s uv run --locked python docker_test.py --miniircd .ci/miniircd/miniircd --skip-build --railway-private
+
+  auth_topology:
+    name: Real Pomerium and Dex auth topology
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build both auth images and verify the two-origin TLS topology
+        run: timeout 600s python3 deploy/container_auth_test.py

@@ -1,0 +1,1499 @@
+{
+  "origin": {
+    "kind": "runtime:hook(command)",
+    "weechat_version": "4.6.3"
+  },
+  "expected_coverage": {
+    "total": 165,
+    "typed": 41,
+    "mixed": 31,
+    "raw": 93
+  },
+  "commands": [
+    {
+      "name": "aaway",
+      "plugin": "alias",
+      "description": "allserv /away",
+      "args": "",
+      "args_description": "",
+      "completion": "%%allserv /away",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "alias",
+      "plugin": "alias",
+      "description": "list, add or remove command aliases",
+      "args": "list [<name>] || add|addreplace <name> [<command>[;<command>...]] || addcompletion|addreplacecompletion <completion> <name> [<command>[;<command>...]] || del <name>|<mask>... || rename <name> <new_name> || missing",
+      "args_description": "[fmt]\nraw[list]: list aliases (without argument, this list is displayed)\nraw[add]: add an alias\nraw[addreplace]: add or replace an existing alias\nraw[addcompletion]: add an alias with a custom completion\nraw[addreplacecompletion]: add or replace an existing alias with a custom completion\nname: name of alias\ncompletion: completion for alias: by default completion is done with target command (you can use \"%%command\" to use the completion of an existing command)\ncommand: command name with arguments (many commands can be separated by semicolons)\nraw[del]: delete aliases\nmask: name where wildcard \"*\" is allowed\nraw[rename]: rename an alias\nraw[missing]: add missing aliases (using default aliases)\n\nIn command, special variables are replaced:\n  $n: argument \"n\" (between 1 and 9)\n  $-m: arguments from 1 to \"m\"\n  $n-: arguments from \"n\" to last\n  $n-m: arguments from \"n\" to \"m\"\n  $*: all arguments\n  $&: all arguments, with \" replaced by \\\"\n  $~: last argument\n  $var: where \"var\" is a local variable of buffer (see /buffer listvar), examples: $nick, $channel, $server, $plugin, $name\n\nExamples:\n  /alias add split /window splith\n  /alias add hello /allchan -exclude=#weechat hello\n  /alias rename hello Hello\n  /alias addcompletion %%sajoin forcejoin /quote forcejoin",
+      "completion": "list %(alias) || add|addreplace %(alias) %(commands:/)|%(alias_value) || addcompletion|addreplacecompletion %- %(alias) %(commands:/)|%(alias_value) || del %(alias)|%* || rename %(alias) %(alias) || missing",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "anick",
+      "plugin": "alias",
+      "description": "allserv /nick",
+      "args": "",
+      "args_description": "",
+      "completion": "%%allserv /nick",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "beep",
+      "plugin": "alias",
+      "description": "print -beep",
+      "args": "",
+      "args_description": "",
+      "completion": "%%print -beep",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "bye",
+      "plugin": "alias",
+      "description": "quit",
+      "args": "",
+      "args_description": "",
+      "completion": "%%quit",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "c",
+      "plugin": "alias",
+      "description": "buffer clear",
+      "args": "",
+      "args_description": "",
+      "completion": "%%buffer clear",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "chat",
+      "plugin": "alias",
+      "description": "dcc chat",
+      "args": "",
+      "args_description": "",
+      "completion": "%%dcc chat",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "cl",
+      "plugin": "alias",
+      "description": "buffer clear",
+      "args": "",
+      "args_description": "",
+      "completion": "%%buffer clear",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "close",
+      "plugin": "alias",
+      "description": "buffer close",
+      "args": "",
+      "args_description": "",
+      "completion": "%%buffer close",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "exit",
+      "plugin": "alias",
+      "description": "quit",
+      "args": "",
+      "args_description": "",
+      "completion": "%%quit",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "ig",
+      "plugin": "alias",
+      "description": "ignore",
+      "args": "",
+      "args_description": "",
+      "completion": "%%ignore",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "j",
+      "plugin": "alias",
+      "description": "join",
+      "args": "",
+      "args_description": "",
+      "completion": "%%join",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "k",
+      "plugin": "alias",
+      "description": "kick",
+      "args": "",
+      "args_description": "",
+      "completion": "%%kick",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "kb",
+      "plugin": "alias",
+      "description": "kickban",
+      "args": "",
+      "args_description": "",
+      "completion": "%%kickban",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "leave",
+      "plugin": "alias",
+      "description": "part",
+      "args": "",
+      "args_description": "",
+      "completion": "%%part",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "m",
+      "plugin": "alias",
+      "description": "msg",
+      "args": "",
+      "args_description": "",
+      "completion": "%%msg",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "msgbuf",
+      "plugin": "alias",
+      "description": "command -buffer $1 * /input send $2-",
+      "args": "",
+      "args_description": "",
+      "completion": "%(buffers_plugins_names)",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "mub",
+      "plugin": "alias",
+      "description": "unban *",
+      "args": "",
+      "args_description": "",
+      "completion": "%%unban *",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "n",
+      "plugin": "alias",
+      "description": "names",
+      "args": "",
+      "args_description": "",
+      "completion": "%%names",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "q",
+      "plugin": "alias",
+      "description": "query",
+      "args": "",
+      "args_description": "",
+      "completion": "%%query",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "redraw",
+      "plugin": "alias",
+      "description": "window refresh",
+      "args": "",
+      "args_description": "",
+      "completion": "%%window refresh",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "say",
+      "plugin": "alias",
+      "description": "msg *",
+      "args": "",
+      "args_description": "",
+      "completion": "%%msg *",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "signoff",
+      "plugin": "alias",
+      "description": "quit",
+      "args": "",
+      "args_description": "",
+      "completion": "%%quit",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "t",
+      "plugin": "alias",
+      "description": "topic",
+      "args": "",
+      "args_description": "",
+      "completion": "%%topic",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "ub",
+      "plugin": "alias",
+      "description": "unban",
+      "args": "",
+      "args_description": "",
+      "completion": "%%unban",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "umode",
+      "plugin": "alias",
+      "description": "mode $nick",
+      "args": "",
+      "args_description": "",
+      "completion": "%%mode $nick",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "v",
+      "plugin": "alias",
+      "description": "command core version",
+      "args": "",
+      "args_description": "",
+      "completion": "%%command core version",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "w",
+      "plugin": "alias",
+      "description": "who",
+      "args": "",
+      "args_description": "",
+      "completion": "%%who",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "wc",
+      "plugin": "alias",
+      "description": "window close",
+      "args": "",
+      "args_description": "",
+      "completion": "%%window close",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "wi",
+      "plugin": "alias",
+      "description": "whois",
+      "args": "",
+      "args_description": "",
+      "completion": "%%whois",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "wii",
+      "plugin": "alias",
+      "description": "whois $1 $1",
+      "args": "",
+      "args_description": "",
+      "completion": "%%whois $1 $1",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "wm",
+      "plugin": "alias",
+      "description": "window merge",
+      "args": "",
+      "args_description": "",
+      "completion": "%%window merge",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "ww",
+      "plugin": "alias",
+      "description": "whowas",
+      "args": "",
+      "args_description": "",
+      "completion": "%%whowas",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "buflist",
+      "plugin": "buflist",
+      "description": "bar item with list of buffers",
+      "args": "enable|disable|toggle || bar || refresh [<item>[,<item>...]]",
+      "args_description": "[fmt]\nraw[enable]: enable buflist\nraw[disable]: disable buflist\nraw[toggle]: toggle buflist\nraw[bar]: add the \"buflist\" bar\nraw[refresh]: force the refresh of some bar items (if no item is given, all bar items used are refreshed, according to option buflist.look.use_items)\n\nThe lines with buffers are displayed using string evaluation (see /help eval for the format), with these options:\n  - buflist.look.display_conditions: conditions to display a buffer in the list\n  - buflist.format.buffer: format for a buffer which is not current buffer\n  - buflist.format.buffer_current: format for the current buffer\n\nThe following variables can be used in these options:\n  - bar item data (see hdata \"bar_item\" in API doc for a complete list), for example:\n    - ${bar_item.name}\n  - window data, where the bar item is displayed (there's no window in root bars, see hdata \"window\" in API doc for a complete list), for example:\n    - ${window.number}\n    - ${window.buffer.full_name}\n  - buffer data (see hdata \"buffer\" in API doc for a complete list), for example:\n    - ${buffer.number}\n    - ${buffer.name}\n    - ${buffer.full_name}\n    - ${buffer.short_name}\n    - ${buffer.nicklist_nicks_count}\n  - irc_server: IRC server data, defined only on an IRC buffer (see hdata \"irc_server\" in API doc)\n  - irc_channel: IRC channel data, defined only on an IRC channel buffer (see hdata \"irc_channel\" in API doc)\n  - extra variables added by buflist for convenience:\n    - ${format_buffer}: the evaluated value of option buflist.format.buffer; this can be used in option buflist.format.buffer_current to just change the background color for example\n    - ${current_buffer}: a boolean (\"0\" or \"1\"), \"1\" if this is the current buffer; it can be used in a condition: ${if:${current_buffer}?...:...}\n    - ${merged}: a boolean (\"0\" or \"1\"), \"1\" if the buffer is merged with at least another buffer; it can be used in a condition: ${if:${merged}?...:...}\n    - ${format_number}: indented number with separator (evaluation of option buflist.format.number)\n    - ${number}: indented number, for example \" 1\" if there are between 10 and 99 buffers; for merged buffers, this variable is set with number for the first buffer and spaces for the next buffers with same number\n    - ${number2}: indented number, for example \" 1\" if there are between 10 and 99 buffers\n    - ${number_displayed}: \"1\" if the number is displayed, otherwise \"0\"\n    - ${indent}: indentation for name (channel, private and list buffers are indented) (evaluation of option buflist.format.indent)\n    - ${format_nick_prefix}: colored nick prefix for a channel (evaluation of option buflist.format.nick_prefix)\n    - ${color_nick_prefix}: color of nick prefix for a channel (set only if the option buflist.look.nick_prefix is enabled)\n    - ${nick_prefix}: nick prefix for a channel (set only if the option buflist.look.nick_prefix is enabled)\n    - ${format_name}: formatted name (evaluation of option buflist.format.name)\n    - ${name}: the short name (if set), with a fallback on the name\n    - ${color_hotlist}: the color depending on the highest hotlist level for the buffer (evaluation of option buflist.format.hotlist_xxx where xxx is the level)\n    - ${format_hotlist}: the formatted hotlist (evaluation of option buflist.format.hotlist)\n    - ${hotlist}: the raw hotlist\n    - ${hotlist_priority}: \"none\", \"low\", \"message\", \"private\" or \"highlight\"\n    - ${hotlist_priority_number}: -1 = none, 0 = low, 1 = message, 2 = private, 3 = highlight\n    - ${format_lag}: the lag for an IRC server buffer, empty if there's no lag (evaluation of option buflist.format.lag)\n    - ${format_tls_version}: indicator of TLS version for a server buffer, empty for channels (evaluation of option buflist.format.tls_version)",
+      "completion": "enable|disable|toggle || bar || refresh %(buflist_items_used)|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "charset",
+      "plugin": "charset",
+      "description": "change charset for current buffer",
+      "args": "decode|encode <charset> || reset",
+      "args_description": "[fmt]\nraw[decode]: change decoding charset\nraw[encode]: change encoding charset\ncharset: new charset for current buffer\nraw[reset]: reset charsets for current buffer",
+      "completion": "decode|encode|reset",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "allbuf",
+      "plugin": "core",
+      "description": "execute a command on all buffers",
+      "args": "<command>",
+      "args_description": "[fmt]\ncommand: command to execute (or text to send to buffer if command does not start with \"/\")\n\nExample:\n  set read marker on all buffers:\n    /allbuf /buffer set unread",
+      "completion": "%(commands:/)",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "away",
+      "plugin": "core",
+      "description": "set or remove away status",
+      "args": "[-all] [<message>]",
+      "args_description": "[fmt]\nraw[-all]: set or remove away status on all connected servers\nmessage: message for away (if no message is given, away status is removed)",
+      "completion": "-all",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "bar",
+      "plugin": "core",
+      "description": "manage bars",
+      "args": "list|listfull|listitems || add|addreplace <name> <type>[,<conditions>] <position> <size> <separator> <item1>[,<item2>...] || default [input|title|status|nicklist] || rename <name> <new_name> || del <name>|<mask>... || set <name> <option> <value> || hide|show|toggle <name> || scroll <name> <window> <scroll_value>",
+      "args_description": "[fmt]\nraw[list]: list all bars\nraw[listfull]: list all bars (verbose)\nraw[listitems]: list all bar items\nraw[add]: add a new bar\nraw[addreplace]: add or replace an existing bar\nname: name of bar (must be unique)\ntype: type of bar:\n> raw[root]: outside windows\n> raw[window]: inside windows, with optional conditions (see below)\nconditions: the conditions to display the bar (without conditions, the bar is always displayed):\n> raw[active]: on active window\n> raw[inactive]: on inactive windows\n> raw[nicklist]: on windows with nicklist\n> other condition: see /help weechat.bar.xxx.conditions and /help eval\nposition: bottom, top, left or right\nsize: size of bar (in chars)\nseparator: 1 for using separator (line), 0 or nothing means no separator\nitem1,...: items for this bar (items can be separated by comma (space between items) or \"+\" (glued items))\nraw[default]: create a default bar (all default bars if no bar name is given)\nraw[rename]: rename a bar\nraw[del]: delete bars\nmask: name where wildcard \"*\" is allowed\nraw[set]: set a value for a bar property\noption: option to change (for options list, look at /set weechat.bar.<barname>.*)\nvalue: new value for option\nraw[hide]: hide a bar\nraw[show]: show an hidden bar\nraw[toggle]: hide/show a bar\nraw[scroll]: scroll bar\nwindow: window number (\"*\" for current window or for root bars)\nscroll_value: value for scroll: \"x\" or \"y\" (optional), followed by \"+\", \"-\", \"b\" (beginning) or \"e\" (end), value (for +/-), and optional \"%\" (to scroll by % of width/height, otherwise value is number of chars)\n\nExamples:\n  create a bar with time, buffer number + name, and completion:\n    /bar add mybar root bottom 1 0 [time],buffer_number+:+buffer_name,completion\n  scroll nicklist 10 lines down on current buffer:\n    /bar scroll nicklist * y+10\n  scroll to end of nicklist on current buffer:\n    /bar scroll nicklist * ye",
+      "completion": "list || listfull || listitems || add|addreplace %(bars_names) root|window bottom|top|left|right || default input|title|status|nicklist|%* || rename %(bars_names) || del %(bars_names)|%* || set %(bars_names) name|%(bars_options) || hide %(bars_names) || show %(bars_names) || toggle %(bars_names) || scroll %(bars_names) %(windows_numbers)|*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "buffer",
+      "plugin": "core",
+      "description": "manage buffers",
+      "args": "list || add [-free] [-switch] <name> || clear [<id>|<number>|<name>|-merged|-all [<id>|<number>|<name>...]] || move <number>|-|+ || swap <id1>|<number1>|<name1> [<id2>|<number2>|<name2>] || cycle <id>|<number>|<name>... || merge <id>|<number>|<name> || unmerge [<number>|-all] || hide [<id>|<number>|<name>|-all [<id>|<number>|<name>...]] || unhide [<id>|<number>|<name>|-all [<id>|<number>|<name>...]] || switch [-previous] || zoom || renumber [<number1> [<number2> [<start>]]] || close [<n1>[-<n2>]|<name>...] || notify [<level>] || listvar [<id>|<number>|<name>] || setvar <name> [<value>] || delvar <name> || set <property> [<value>] || setauto <property> [<value>] || get <property> || jump smart|last_displayed|prev_visited|next_visited || <id>|<number>|-|+|<name>",
+      "args_description": "[fmt]\nraw[list]: list buffers (without argument, this list is displayed)\nraw[add]: add a new buffer (it can be closed with \"/buffer close\" or input \"q\")\nraw[clear]: clear buffer content (number for a buffer, \"-merged\" for merged buffers, \"-all\" for all buffers, or nothing for current buffer)\nraw[move]: move buffer in the list (may be relative, for example -1); \"-\" = move to first buffer number, \"+\" = move to last buffer number + 1\nraw[swap]: swap two buffers (swap with current buffer if only one number/name given)\nraw[cycle]: jump loop between a list of buffers\nraw[merge]: merge current buffer to another buffer (chat area will be mix of both buffers); by default ctrl-x switches between merged buffers\nraw[unmerge]: unmerge buffer from other buffers which have same number\nraw[hide]: hide the buffer\nraw[unhide]: unhide the buffer\nraw[switch]: switch to next merged buffer (or to previous buffer with \"-previous\")\nraw[zoom]: zoom on merged buffer\nraw[renumber]: renumber buffers (works only if option weechat.look.buffer_auto_renumber is off)\nraw[close]: close buffer (number/range or name is optional)\nraw[notify]: display or set notify level for current buffer: this level determines whether buffer will be added to hotlist or not:\n> raw[none]: never\n> raw[highlight]: for highlights only\n> raw[message]: for messages from users + highlights\n> raw[all]: for all messages\n> raw[reset]: reset to default value (all)\nraw[listvar]: display local variables in a buffer\nraw[setvar]: set a local variable in the current buffer\nraw[delvar]: delete a local variable from the current buffer\nraw[set]: set a property in the current buffer\nraw[setauto]: like \"set\" and also define option \"weechat.buffer.<name>.<property>\" so that the property is saved in configuration and applied each time this buffer is opened\nraw[get]: display a property of current buffer\nraw[jump]: jump to another buffer:\n> raw[smart]: next buffer with activity\n> raw[last_displayed]: last buffer displayed (before last jump to a buffer)\n> raw[prev_visited]: previously visited buffer\n> raw[next_visited]: jump to next visited buffer\nid: jump to buffer by id\nnumber: jump to buffer by number, possible prefix:\n> \"+\": relative jump, add number to current\n> \"-\": relative jump, sub number to current\n> \"*\": jump to number, using option \"weechat.look.jump_current_to_previous_buffer\"\nraw[-]: jump to first buffer number\nraw[+]: jump to last buffer number\nname: jump to buffer by (partial) name; if the name starts with \"(?i)\", the search is case-insensitive (for example \"(?i)upper\" will find buffer \"irc.libera.#UPPERCASE\")\n\nExamples:\n  /buffer move 5\n  /buffer swap 1 3\n  /buffer swap #weechat\n  /buffer cycle #chan1 #chan2 #chan3\n  /buffer merge 1\n  /buffer merge #weechat\n  /buffer close 5-7\n  /buffer #weechat\n  /buffer +1\n  /buffer +",
+      "completion": "add -free|-switch || clear -merged|-all|%(buffers_numbers)|%(buffers_plugins_names) %(buffers_numbers)|%(buffers_plugins_names)|%* || move %(buffers_numbers) || swap %(buffers_numbers)|%(buffers_plugins_names) %(buffers_numbers)|%(buffers_plugins_names) || cycle %(buffers_numbers)|%(buffers_plugins_names)|%* || merge %(buffers_numbers)|%(buffers_plugins_names) || unmerge %(buffers_numbers)|-all || hide %(buffers_numbers)|%(buffers_plugins_names)|-all %(buffers_numbers)|%(buffers_plugins_names)|%* || unhide %(buffers_numbers)|%(buffers_plugins_names)|-all  || switch -previous || zoom%(buffers_numbers)|%(buffers_plugins_names)|%* || renumber %(buffers_numbers) %(buffers_numbers) %(buffers_numbers) || close %(buffers_plugins_names)|%* || list || notify reset|none|highlight|message|all || listvar %(buffers_numbers)|%(buffers_plugins_names) || setvar %(buffer_local_variables) %(buffer_local_variable_value) || delvar %(buffer_local_variables) || set %(buffer_properties_set) || setauto %(buffer_properties_setauto) || get %(buffer_properties_get) || jump smart|last_displayed|prev_visited|next_visited || %(buffers_plugins_names)|%(buffers_names)|%(irc_channels)|%(irc_privates)|%(buffers_numbers)|-|-1|+|+1",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "color",
+      "plugin": "core",
+      "description": "define color aliases and display palette of colors",
+      "args": "alias <color> <name> || unalias <color> || reset || term2rgb <color> || rgb2term <rgb> [<limit>] || -o",
+      "args_description": "[fmt]\nraw[alias]: add an alias for a color\nraw[unalias]: delete an alias\ncolor: color number (greater than or equal to 0, max depends on terminal, commonly 63 or 255)\nname: alias name for color (for example: \"orange\")\nraw[reset]: reset all color pairs (required when no more color pairs are available if automatic reset is disabled, see option \"weechat.look.color_pairs_auto_reset\")\nraw[term2rgb]: convert a terminal color (0-255) to RGB color\nraw[rgb2term]: convert a RGB color to terminal color (0-255)\nlimit: number of colors to use in terminal table (starting from 0); default is 256\nraw[-o]: send terminal/colors info to current buffer as input\n\nWithout argument, this command displays colors in a new buffer.\n\nExamples:\n  /color alias 214 orange\n  /color unalias 214",
+      "completion": "alias %(palette_colors) || unalias %(palette_colors) || reset || term2rgb || rgb2term || -o",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "command",
+      "plugin": "core",
+      "description": "launch explicit WeeChat or plugin command",
+      "args": "[-buffer <name>] <plugin> <command> || -s <command>[;<command>...]",
+      "args_description": "[fmt]\nraw[-buffer]: execute the command on this buffer\nplugin: execute the command from this plugin; \"core\" for a WeeChat command, \"*\" for automatic plugin (it depends on the buffer where the command is executed)\ncommand: command to execute (a \"/\" is automatically added if not found at beginning of command)\nraw[-s]: execute one or multiple commands separated by semicolons (the semicolon can be escaped with \"\\;\")",
+      "completion": "-buffer %(buffers_plugins_names) %(plugins_names)|core %(plugins_commands:/) || -s || %(plugins_names)|core %(plugins_commands:/)",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "cursor",
+      "plugin": "core",
+      "description": "free movement of cursor on screen to execute actions on specific areas of screen",
+      "args": "go chat|<bar> [top_left|top_right|bottom_left|bottom_right] || go <x>,<y> || move up|down|left|right|top_left|top_right|bottom_left|bottom_right|edge_top|edge_bottom|edge_left|edge_right|area_up|area_down|area_left|area_right || stop",
+      "args_description": "[fmt]\nraw[go]: move cursor to chat area, a bar (using bar name) or coordinates \"x,y\"\nraw[move]: move cursor with direction\nraw[stop]: stop cursor mode\n\nWithout argument, this command toggles cursor mode.\n\nWhen mouse is enabled (see /help mouse), by default a middle click will start cursor mode at this point.\n\nSee chapter on key bindings in User's guide for a list of keys that can be used in cursor mode.\n\nExamples:\n  /cursor go chat bottom_left\n  /cursor go nicklist\n  /cursor go 10,5",
+      "completion": "go %(cursor_areas) top_left|top_right|bottom_left|bottom_right || move up|down|left|right|top_left|top_right|bottom_left|bottom_right|edge_top|edge_bottom|edge_left|edge_right|area_up|area_down|area_left|area_right || stop",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "debug",
+      "plugin": "core",
+      "description": "debug functions",
+      "args": "list || set <plugin> <level> || dump [<plugin>] || hooks [<plugin_mask> [<hook_type>...]] || buffer|certs|color|dirs|infolists|key|libs|memory|tags|term|url|windows || callbacks <duration>[<unit>] || mouse|cursor [verbose] || hdata [free] || time <command> || unicode <string> || whitespace",
+      "args_description": "[fmt]\nraw[list]: list plugins with debug levels\nraw[set]: set debug level for plugin\nplugin: name of plugin (\"core\" for WeeChat core)\nlevel: debug level for plugin (0 = disable debug)\nraw[dump]: save memory dump in WeeChat log file (same dump is written when WeeChat crashes)\nraw[hooks]: display infos about hooks (with a plugin: display detailed info about hooks created by the plugin)\nplugin_mask: plugin mask, \"*\" for all plugins\nhook_type: hook type\nraw[buffer]: dump buffer content with hexadecimal values in WeeChat log file\nraw[callbacks]: write hook and bar item callbacks that took more than \"duration\" in the WeeChat log file (0 = disable), where optional unit is one of:\n> raw[us]: microseconds (default)\n> raw[ms]: milliseconds\n> raw[s]: seconds\n> raw[m]: minutes\n> raw[h]: hours\nraw[certs]: display number of loaded trusted certificate authorities\nraw[color]: display infos about current color pairs\nraw[cursor]: toggle debug for cursor mode\nraw[dirs]: display directories\nraw[hdata]: display infos about hdata (with free: remove all hdata in memory)\nraw[infolists]: display infos about infolists\nraw[key]: enable keyboard and mouse debug: display raw codes, expanded key name and associated command (\"q\" to quit this mode)\nraw[libs]: display infos about external libraries used\nraw[memory]: display infos about memory usage\nraw[mouse]: toggle debug for mouse\nraw[tags]: display tags for lines\nraw[term]: display infos about terminal\nraw[url]: toggle debug for calls to hook_url (display output hashtable)\nraw[windows]: display windows tree\nraw[time]: measure time to execute a command or to send text to the current buffer\nraw[unicode]: display information about string and unicode chars (evaluated, see /help eval)\nraw[whitespace]: toggle whitespace mode: make spaces and tabulations visible in buffers and bars (see options weechat.look.whitespace_char and weechat.look.tab_whitespace_char)\n\nExamples:\n  /debug set irc 1\n  /debug mouse verbose\n  /debug time /filter toggle\n  /debug hooks * process connect url\n  /debug unicode ${chars:${\\u26C0}-${\\u26CF}}",
+      "completion": "list || set %(plugins_names)|core || dump %(plugins_names)|core || buffer || callbacks || certs || color || cursor verbose || dirs || hdata free || hooks %(plugins_names)|core %(hook_types)|%* || infolists || key || libs || memory || mouse verbose || tags || term || url || windows || time %(commands:/) || unicode || whitespace",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "eval",
+      "plugin": "core",
+      "description": "evaluate expression",
+      "args": "[-n|-s] [-d] <expression> || [-n] [-d [-d]] -c <expression1> <operator> <expression2>",
+      "args_description": "[fmt]\nraw[-n]: display result without sending it to buffer (debug mode)\nraw[-s]: split expression before evaluating it (many commands can be separated by semicolons)\nraw[-d]: display debug output after evaluation (with two -d: more verbose debug)\nraw[-c]: evaluate as condition: use operators and parentheses, return a boolean value (\"0\" or \"1\")\nexpression: expression to evaluate, variables with format ${variable} are replaced (see below)\noperator: a logical or comparison operator (see below)\n\nAn expression is considered as \"true\" if it is not NULL, not empty, and different from \"0\".\nThe comparison is made using floating point numbers if the two expressions are valid numbers, with one of the following formats: integer (examples: 5, -7), floating point number (examples: 5.2, -7.5, 2.83e-2), hexadecimal number (examples: 0xA3, -0xA3).\nTo force a string comparison, you can add double quotes around each expression, for example: 50 > 100 == 0 and \"50\" > \"100\" == 1\n\nSome variables are replaced in expression, using the format ${variable}, which can be, by order of priority:\n  - ${raw_hl:string}: the string itself without evaluation but with syntax highlighting\n  - ${raw:string}: the string itself without evaluation\n  - ${hl:string}: the string with syntax highlighting\n  - ${name}: the user-defined variable\n  - ${weechat_config_dir}: WeeChat config directory\n  - ${weechat_data_dir}: WeeChat data directory\n  - ${weechat_state_dir}: WeeChat state directory\n  - ${weechat_cache_dir}: WeeChat cache directory\n  - ${weechat_runtime_dir}: WeeChat runtime directory\n  - ${eval:string}: the evaluated string\n  - ${eval_cond:string}: the evaluated condition\n  - ${esc:string} or ${\\string}: the string with escaped chars\n  - ${chars:range}: the string with a range of chars, \"range\" is one of: \"digit\", \"xdigit\", \"lower\", \"upper\", \"alpha\", \"alnum\" or \"c1-c2\" (\"c1\" and \"c2\" are code points with c1 \u2264 c2)\n  - ${lower:string}: the string converted to lower case\n  - ${upper:string}: the string converted to upper case\n  - ${hide:char,string}: the string with hidden chars\n  - ${cut:max,suffix,string}: the string with max chars (excluding the suffix)\n  - ${cut:+max,suffix,string}: the string with max chars (including the suffix)\n  - ${cutscr:max,suffix,string}: the string with max chars displayed on screen (excluding the suffix)\n  - ${cutscr:+max,suffix,string}: the string with max chars displayed on screen (including the suffix)\n  - ${rev:string}: the reversed string\n  - ${revscr:string}: the reversed string for display (color codes are not reversed)\n  - ${repeat:count,string}: the repeated string\n  - ${length:string}: the length of the string (number of UTF-8 chars)\n  - ${lengthscr:string}: the length of the string on screen (sum of the width of each UTF-8 char displayed on screen, colors codes are ignored)\n  - ${split:N,separators,flags,string}: Nth item of the split string (N is an integer \u2265 1 or \u2264 -1, if negative, counts from the last item)\n  - ${split:random,separators,flags,string}: random item of the split string\n  - ${split:count,separators,flags,string}: number of items of the split string\n  - ${split_shell:N,string}: Nth item of the split shell arguments (N is an integer \u2265 1 or \u2264 -1, if negative, counts from the last item)\n  - ${split_shell:random,string}: random item of the split shell arguments\n  - ${split_shell:count,string}: number of items of the split shell arguments\n  - ${color:name}: the color (see \"Plugin API reference\", function \"color\")\n  - ${modifier:name,data,string}: the modifier\n  - ${info:name,arguments}: the info (arguments are optional)\n  - ${base_encode:base,string}: the string encoded to base: 16, 32, 64 or 64url\n  - ${base_decode:base,string}: the string decoded from base: 16, 32, 64 or 64url\n  - ${date} or ${date:format}: current date/time\n  - ${env:NAME}: the environment variable\n  - ${if:condition?value_if_true:value_if_false}: the result of ternary operator\n  - ${calc:expression}: the result of the expression with parentheses and operators (+, -, *, /, //, %, **)\n  - ${random:min,max}: a random integer number between \"min\" and \"max\" (inclusive)\n  - ${translate:string}: the translated string\n  - ${define:name,value}: declaration of a user variable (return an empty string)\n  - ${hdata_count:name[list]}: number of items in this hdata with list\n  - ${hdata_count:name[ptr]}: number of items in this hdata with pointer\n  - ${sec.data.xxx}: the value of the secured data \"xxx\"\n  - ${file.section.option}: the value of the config option\n  - ${name}: the local variable in buffer\n  - the hdata name/variable (the value is automatically converted to string), by default \"window\" and \"buffer\" point to current window/buffer.\n\nFormat for hdata can be one of following:\n  - ${hdata.var1.var2...}: start with a hdata (pointer must be known), and ask variables one after one (other hdata can be followed)\n  - ${hdata[list].var1.var2...}: start with a hdata using a list/pointer/pointer name, for example:\n    - ${buffer[gui_buffers].full_name}: full name of first buffer in linked list of buffers\n    - ${plugin[weechat_plugins].name}: name of first plugin in linked list of plugins\n  - ${hdata[pointer].var1.var2...}: start with a hdata using a pointer, for example:\n    - ${buffer[0x1234abcd].full_name}: full name of the buffer with this pointer (can be used in triggers)\n    - ${buffer[my_pointer].full_name}: full name of the buffer with this pointer name (can be used in triggers)\n  - ${hdata[pointer].var1.method()}: when var1 is a hashtable, methods can be called: \"keys()\", \"values()\", \"keys_sorted()\", \"keys_values()\" and \"keys_values_sorted()\"\nFor name of hdata and variables, please look at \"Plugin API reference\", function \"weechat_hdata_get\".\n\nLogical operators (by order of priority):\n  &&   boolean \"and\"\n  ||   boolean \"or\"\n\nComparison operators (by order of priority):\n  =~   is matching POSIX extended regex\n  !~   is NOT matching POSIX extended regex\n  ==*  is matching mask, case-sensitive (wildcard \"*\" is allowed)\n  !!*  is NOT matching mask, case-sensitive (wildcard \"*\" is allowed)\n  =*   is matching mask, case-insensitive (wildcard \"*\" is allowed)\n  !*   is NOT matching mask, case-insensitive (wildcard \"*\" is allowed)\n  ==-  is included, case-sensitive\n  !!-  is NOT included, case-sensitive\n  =-   is included, case-insensitive\n  !-   is NOT included, case-insensitive\n  ==   equal\n  !=   not equal\n  <=   less or equal\n  <    less\n  >=   greater or equal\n  >    greater\n\nExamples (simple strings):\n  /eval -n ${raw:${info:version}}                  ==> ${info:version}\n  /eval -n ${eval_cond:${window.win_width}>100}    ==> 1\n  /eval -n ${info:version}                         ==> 4.6.3\n  /eval -n ${env:HOME}                             ==> /home/user\n  /eval -n ${weechat.look.scroll_amount}           ==> 3\n  /eval -n ${sec.data.password}                    ==> secret\n  /eval -n ${window}                               ==> 0x2549aa0\n  /eval -n ${window.buffer}                        ==> 0x2549320\n  /eval -n ${window.buffer.full_name}              ==> core.weechat\n  /eval -n ${window.buffer.number}                 ==> 1\n  /eval -n ${buffer.local_variables.keys_values()} ==> plugin:core,name:weechat\n  /eval -n ${buffer.local_variables.plugin}        ==> core\n  /eval -n ${hdata_count:buffer[gui_buffers]}      ==> 15\n  /eval -n ${\\t}                                   ==> <tab>\n  /eval -n ${chars:digit}                          ==> 0123456789\n  /eval -n ${chars:J-T}                            ==> JKLMNOPQRST\n  /eval -n ${lower:TEST}                           ==> test\n  /eval -n ${upper:test}                           ==> TEST\n  /eval -n ${hide:-,${relay.network.password}}     ==> --------\n  /eval -n ${cut:3,+,test}                         ==> tes+\n  /eval -n ${cut:+3,+,test}                        ==> te+\n  /eval -n ${date:%H:%M:%S}                        ==> 07:46:40\n  /eval -n ${if:${info:term_width}>80?big:small}   ==> big\n  /eval -n ${rev:Hello}                            ==> olleH\n  /eval -n ${repeat:5,-}                           ==> -----\n  /eval -n ${length:test}                          ==> 4\n  /eval -n ${split:1,,,abc,def,ghi}                ==> abc\n  /eval -n ${split:-1,,,abc,def,ghi}               ==> ghi\n  /eval -n ${split:count,,,abc,def,ghi}            ==> 3\n  /eval -n ${split:random,,,abc,def,ghi}           ==> def\n  /eval -n ${split_shell:1,\"arg 1\" arg2}           ==> arg 1\n  /eval -n ${split_shell:-1,\"arg 1\" arg2}          ==> arg2\n  /eval -n ${split_shell:count,\"arg 1\" arg2}       ==> 2\n  /eval -n ${split_shell:random,\"arg 1\" arg2}      ==> arg2\n  /eval -n ${calc:(5+2)*3}                         ==> 21\n  /eval -n ${random:0,10}                          ==> 3\n  /eval -n ${base_encode:64,test}                  ==> dGVzdA==\n  /eval -n ${base_decode:64,dGVzdA==}              ==> test\n  /eval -n ${define:len,${calc:5+3}}${len}x${len}  ==> 8x8\n\nExamples (conditions):\n  /eval -n -c ${window.buffer.number} > 2 ==> 0\n  /eval -n -c ${window.win_width} > 100   ==> 1\n  /eval -n -c (8 > 12) || (5 > 2)         ==> 1\n  /eval -n -c (8 > 12) && (5 > 2)         ==> 0\n  /eval -n -c abcd =~ ^ABC                ==> 1\n  /eval -n -c abcd =~ (?-i)^ABC           ==> 0\n  /eval -n -c abcd =~ (?-i)^abc           ==> 1\n  /eval -n -c abcd !~ abc                 ==> 0\n  /eval -n -c abcd =* a*d                 ==> 1\n  /eval -n -c abcd =- bc                  ==> 1",
+      "completion": "-n|-s|-c|%(eval_variables)|%*",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "filter",
+      "plugin": "core",
+      "description": "filter messages in buffers, to hide/show them according to tags or regex",
+      "args": "list || enable|disable|toggle [<name>|<mask>|@...] || add|addreplace <name> <buffer>[,<buffer>...] <tags> <regex> || rename <name> <new_name> || recreate <name> || del <name>|<mask>...",
+      "args_description": "[fmt]\nraw[list]: list all filters\nraw[enable]: enable filters (filters are enabled by default)\nraw[disable]: disable filters\nraw[toggle]: toggle filters\nmask: name where wildcard \"*\" is allowed (\"@\" = enable/disable all filters in current buffer)\nraw[add]: add a filter\nraw[addreplace]: add or replace an existing filter\nname: filter name\nraw[rename]: rename a filter\nraw[recreate]: set input with the command used to edit the filter\nraw[del]: delete filters\nbuffer: comma separated list of buffers where filter is active:\n> - this is full name including plugin (example: \"irc.libera.#weechat\" or \"irc.server.libera\")\n> - \"*\" means all buffers\n> - a name starting with \"!\" is excluded\n> - wildcard \"*\" is allowed\ntags: comma separated list of tags (for example \"irc_join,irc_part,irc_quit\"):\n> - logical \"and\": \"+\" between tags (for example: \"nick_toto+irc_action\")\n> - wildcard \"*\" is allowed\n> - if tag starts with \"!\", then it is excluded and must NOT be in message\nregex: POSIX extended regular expression to search in line:\n> - use \"\\t\" to separate prefix from message, special chars like \"|\" must be escaped: \"\\|\"\n> - if regex starts with \"!\", then matching result is reversed (use \"\\!\" to start with \"!\")\n> - two regular expressions are created: one for prefix and one for message\n> - regex are case-insensitive, they can start by \"(?-i)\" to become case-sensitive\n\nThe default key alt+\"=\" toggles filtering on/off globally and alt+\"-\" toggles filtering on/off in the current buffer.\n\nTags most commonly used: no_filter, no_highlight, no_log, log0..log9 (log level), notify_none, notify_message, notify_private, notify_highlight, self_msg, nick_xxx (xxx is nick in message), prefix_nick_ccc (ccc is color of nick), host_xxx (xxx is username + host in message), irc_xxx (xxx is command name or number, see /server raw or /debug tags), irc_numeric, irc_error, irc_action, irc_ctcp, irc_ctcp_reply, irc_smart_filter, away_info.\nTo see tags for lines in buffers: /debug tags\n\nExamples:\n  use IRC smart filter on all buffers:\n    /filter add irc_smart * irc_smart_filter *\n  use IRC smart filter on all buffers except those with \"#weechat\" in name:\n    /filter add irc_smart *,!*#weechat* irc_smart_filter *\n  filter all IRC join/part/quit messages:\n    /filter add joinquit * irc_join,irc_part,irc_quit *\n  filter nicks displayed when joining channels or with /names:\n    /filter add nicks * irc_366 *\n  filter nick \"toto\" on IRC channel #weechat:\n    /filter add toto irc.libera.#weechat nick_toto *\n  filter IRC join/action messages from nick \"toto\":\n    /filter add toto * nick_toto+irc_join,nick_toto+irc_action *\n  filter lines containing \"weechat sucks\" on IRC channel #weechat:\n    /filter add sucks irc.libera.#weechat * weechat sucks\n  filter lines that are strictly equal to \"WeeChat sucks\" on all buffers:\n    /filter add sucks2 * * (?-i)^WeeChat sucks$",
+      "completion": "list || enable %(filters_names_disabled)|@|%+ || disable %(filters_names_enabled)|@|%+ || toggle %(filters_names)|@|%+ || add|addreplace %(filters_names) %(buffers_plugins_names)|* || rename %(filters_names) %(filters_names) || recreate %(filters_names) || del %(filters_names)|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "help",
+      "plugin": "core",
+      "description": "display help about commands and options",
+      "args": "-list|-listfull [<plugin>...]] || <command> || <option>",
+      "args_description": "[fmt]\nraw[-list]: list commands, by plugin (without argument, this list is displayed)\nraw[-listfull]: list commands with description, by plugin\nplugin: list commands for this plugin\ncommand: a command name\noption: an option name (use /set to see list)",
+      "completion": "-list %(plugins_names)|core|%* || -listfull %(plugins_names)|core|%* || %(commands)|%(config_options)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "history",
+      "plugin": "core",
+      "description": "show buffer command history",
+      "args": "clear || <value>",
+      "args_description": "[fmt]\nraw[clear]: clear history\nvalue: number of history entries to show",
+      "completion": "clear",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "hotlist",
+      "plugin": "core",
+      "description": "manage hotlist",
+      "args": "add [low|message|private|highlight] || clear [<level>] || remove || restore [-all]",
+      "args_description": "[fmt]\nraw[add]: add current buffer in hotlist (default level: \"low\", conditions defined in option weechat.look.hotlist_add_conditions are NOT checked)\nraw[clear]: clear hotlist\nlevel: \"lowest\" to clear only lowest level in hotlist, highest\" to clear only highest level in hotlist, or level mask: integer which is a combination of 1=join/part, 2=message, 4=private, 8=highlight\nraw[remove]: remove current buffer from hotlist\nraw[restore]: restore latest hotlist removed in the current buffer (or all buffers with \"-all\")",
+      "completion": "add low|message|private|highlight || clear 1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|lowest|highest || remove || restore -all",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "input",
+      "plugin": "core",
+      "description": "functions for command line",
+      "args": "<action> [<arguments>]",
+      "args_description": "[fmt]\naction: the action, one of:\n> raw[return]: simulate key \"enter\"\n> raw[split_return]: split input on newlines then simulate key \"enter\" for each line\n> raw[complete_next]: complete word with next completion\n> raw[complete_previous]: complete word with previous completion\n> raw[search_text_here]: search text in buffer at current position\n> raw[search_text]: search text in buffer\n> raw[search_history]: search text in command line history\n> raw[search_switch_case]: switch exact case for search\n> raw[search_switch_regex]: switch search type: string/regular expression\n> raw[search_switch_where]: switch search in messages/prefixes\n> raw[search_previous]: search previous line\n> raw[search_next]: search next line\n> raw[search_stop_here]: stop search at current position\n> raw[search_stop]: stop search\n> raw[delete_previous_char]: delete previous char\n> raw[delete_next_char]: delete next char\n> raw[delete_previous_word]: delete previous word\n> raw[delete_previous_word_whitespace]: delete previous word (until whitespace)\n> raw[delete_next_word]: delete next word\n> raw[delete_beginning_of_line]: delete from beginning of line until cursor\n> raw[delete_beginning_of_input]: delete from beginning of input until cursor\n> raw[delete_end_of_line]: delete from cursor until end of line\n> raw[delete_end_of_input]: delete from cursor until end of input\n> raw[delete_line]: delete current line\n> raw[delete_input]: delete entire input\n> raw[clipboard_paste]: paste from the internal clipboard\n> raw[transpose_chars]: transpose two chars\n> raw[undo]: undo last command line action\n> raw[redo]: redo last command line action\n> raw[move_beginning_of_line]: move cursor to beginning of line\n> raw[move_beginning_of_input]: move cursor to beginning of input\n> raw[move_end_of_line]: move cursor to end of line\n> raw[move_end_of_input]: move cursor to end of input\n> raw[move_previous_char]: move cursor to previous char\n> raw[move_next_char]: move cursor to next char\n> raw[move_previous_word]: move cursor to previous word\n> raw[move_next_word]: move cursor to next word\n> raw[move_previous_line]: move cursor to previous line\n> raw[move_next_line]: move cursor to next line\n> raw[history_previous]: recall previous command in current buffer history\n> raw[history_next]: recall next command in current buffer history\n> raw[history_global_previous]: recall previous command in global history\n> raw[history_global_next]: recall next command in global history\n> raw[history_use_get_next]: send the current history entry (found with search or recalled with \"up\"key) and insert the next history entry in the command line without sending it\n> raw[grab_key]: grab a key (optional argument: delay for end of grab, default is 500 milliseconds)\n> raw[grab_key_command]: grab a key with its associated command (optional argument: delay for end of grab, default is 500 milliseconds)\n> raw[grab_mouse]: grab mouse event code\n> raw[grab_mouse_area]: grab mouse event code with area\n> raw[insert]: insert text in command line (escaped chars are allowed, see /help print)\n> raw[send]: send text to the buffer\narguments: optional arguments for the action\n\nThis command is used by key bindings or plugins.",
+      "completion": "return || split_return || complete_next || complete_previous || search_text_here || search_text || search_history || search_switch_case || search_switch_regex || search_switch_where || search_previous || search_next || search_stop_here || search_stop || delete_previous_char || delete_next_char || delete_previous_word || delete_previous_word_whitespace || delete_next_word || delete_beginning_of_line || delete_beginning_of_input || delete_end_of_line || delete_end_of_input || delete_line || delete_input || clipboard_paste || transpose_chars || undo || redo || move_beginning_of_line || move_beginning_of_input || move_end_of_line || move_end_of_input || move_previous_char || move_next_char || move_previous_word || move_next_word || move_previous_line || move_next_line || history_previous || history_next || history_global_previous || history_global_next || history_use_get_next || grab_key || grab_key_command || grab_mouse || grab_mouse_area || insert || send",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "item",
+      "plugin": "core",
+      "description": "manage custom bar items",
+      "args": "list || add|addreplace <name> \"<conditions>\" \"<content>\" || rename <name> <new_name> || refresh <name>|<mask>... || recreate <name> || del <name>|<mask>...",
+      "args_description": "[fmt]\nraw[list]: list all custom bar items\nraw[add]: add a custom bar item\nraw[addreplace]: add or replace an existing custom bar item\nname: custom bar item name\nmask: name where wildcard \"*\" is allowed\nconditions: evaluated conditions to display the bar item (for example to display the bar item only in specific buffers)\ncontent: content (evaluated, see /help eval)\nraw[rename]: rename a custom bar item\nraw[refresh]: update content of item in all bars where the item is displayed; any item can be refreshed: default/plugin/custom bar items\nraw[recreate]: set input with the command used to edit the custom bar item\nraw[del]: delete custom bar items\n\nExamples:\n  add item with terminal size, displayed only in buffers with number = 1:\n    /item add terminfo \"${buffer.number} == 1\" \"term:${info:term_width}x${info:term_height}\"\n  add item with buffer info:\n    /item add bufinfo \"\" \"${buffer.number}:${buffer.name}${if:${buffer.zoomed}?(Z)}\"\n  add item with date/time using format \"Dec 25, 12:34 +0100\", refreshed every minute:\n    /item add datetime \"\" \"${date:%b %d, %H:%M %z}\"\n    /trigger add datetime_refresh timer \"60000;60\" \"\" \"\" \"/item refresh datetime\"\n  add item with number of lines in buffer (displayed/total), refreshed each time a new line is displayed or if filtered lines have changed:\n    /item add lines_count \"\" \"${calc:${buffer.lines.lines_count}-${buffer.lines.lines_hidden}}/${buffer.lines.lines_count} lines\"\n    /trigger add lines_count_refresh_print print \"\" \"\" \"\" \"/item refresh lines_count\"\n    /trigger add lines_count_refresh_signal signal \"window_switch;buffer_switch;buffer_lines_hidden;filters_*\" \"\" \"\" \"/item refresh lines_count\"\n  force refresh of item \"lines_count\":\n    /item refresh lines_count\n  recreate item \"lines_count\" with different conditions or content:\n    /item recreate lines_count\n  delete item \"lines_count\":\n    /item del lines_count",
+      "completion": "list || add|addreplace %(custom_bar_item_add_arguments)|%* || rename %(custom_bar_items_names) %(custom_bar_items_names) || refresh %(bars_items)|%* || recreate %(custom_bar_items_names) || del %(custom_bar_items_names)|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "key",
+      "plugin": "core",
+      "description": "bind/unbind keys",
+      "args": "[list|listdefault|listdiff] [<context>] || bind <key> [<command> [<args>]] || bindctxt <context> <key> [<command> [<args>]] || unbind <key> || unbindctxt <context> <key> || reset <key> || resetctxt <context> <key> || resetall -yes [<context>] || missing [<context>] || legacy <key>...",
+      "args_description": "[fmt]\nraw[list]: list all current keys\nraw[listdefault]: list default keys\nraw[listdiff]: list differences between current and default keys (keys added, redefined or deleted)\ncontext: name of context (\"default\" or \"search\")\nraw[bind]: bind a command to a key or display command bound to key (for context \"default\")\nraw[bindctxt]: bind a command to a key or display command bound to key, for given context\ncommand: command (many commands can be separated by semicolons); quotes can be used to preserve spaces at the beginning/end of command\nraw[unbind]: remove a key binding (for context \"default\")\nraw[unbindctxt]: remove a key binding for given context\nraw[reset]: reset a key to default binding (for context \"default\")\nraw[resetctxt]: reset a key to default binding, for given context\nraw[resetall]: restore bindings to the default values and delete ALL personal bindings (use carefully!)\nraw[missing]: add missing keys (using default bindings), useful after installing new WeeChat version\nraw[legacy]: display new name for legacy keys\n\nWhen binding a command to a key, it is recommended to use key alt+k (or Esc then k), and then press the key to bind: this will insert key name in command line.\n\nFor some keys you might need to use /debug key, this displays the raw key code that can be used (for example the key ctrl+backspace could be \"ctrl-h\" or \"ctrl-?\", depending on your terminal and other settings).\n\nModifiers allowed (in this order when multiple are used):\n  \"meta-\": alt key\n  \"ctrl-\": control key\n  \"shift-\": shift key, can only be used with key names below\n\nKey names allowed: f0 to f20, home, insert, delete, end, backspace, pgup, pgdn, up, down, right, left, tab, return, comma, space.\n\nCombo of keys must be separated by a comma.\n\nFor context \"mouse\" (possible in context \"cursor\" too), key has format: \"@area:key\" or \"@area1>area2:key\" where area can be:\n  raw[*]: any area on screen\n  raw[chat]: chat area (any buffer)\n  raw[chat(xxx)]: chat area for buffer with name \"xxx\" (full name including plugin)\n  raw[bar(*)]: any bar\n  raw[bar(xxx)]: bar \"xxx\"\n  raw[item(*)]: any bar item\n  raw[item(xxx)]: bar item \"xxx\"\nWildcard \"*\" is allowed in key to match many mouse events.\nA special value for command with format \"hsignal:name\" can be used for context mouse, this will send the hsignal \"name\" with the focus hashtable as argument.\nAnother special value \"-\" can be used to disable key (it will be ignored when looking for keys).\n\nExamples:\n  /key bind meta-r /buffer #weechat\n  /key reset meta-r\n  /key bind meta-v,f1 /help\n  /key bindctxt search f12 /input search_stop\n  /key bindctxt mouse @item(buffer_nicklist):button3 /msg nickserv info ${nick}",
+      "completion": "list %(keys_contexts) || listdefault %(keys_contexts) || listdiff %(keys_contexts) || bind %(keys_codes) %(commands:/) || bindctxt %(keys_contexts) %(keys_codes) %(commands:/) || unbind %(keys_codes) || unbindctxt %(keys_contexts) %(keys_codes) || reset %(keys_codes_for_reset) || resetctxt %(keys_contexts) %(keys_codes_for_reset) || resetall %- %(keys_contexts) || missing %(keys_contexts) || legacy",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "layout",
+      "plugin": "core",
+      "description": "manage buffers/windows layouts",
+      "args": "store [<name>] [buffers|windows] || apply [<name>] [buffers|windows] || leave || del [<name>] [buffers|windows] || rename <name> <new_name>",
+      "args_description": "[fmt]\nraw[store]: store current buffers/windows in a layout\nraw[apply]: apply stored layout\nraw[leave]: leave current layout (does not update any layout)\nraw[del]: delete buffers and/or windows in a stored layout (if neither \"buffers\" nor \"windows\" is given after the name, the layout is deleted)\nraw[rename]: rename a layout\nname: name for stored layout (default is \"default\")\nraw[buffers]: store/apply only buffers (order of buffers)\nraw[windows]: store/apply only windows (buffer displayed by each window)\n\nWithout argument, this command displays stored layouts.\n\nThe current layout can be saved on /quit command with the option \"weechat.look.save_layout_on_exit\".\n\nNote: the layout only remembers windows split and buffers numbers. It does not open buffers. That means for example you must still auto-join IRC channels to open the buffers, the saved layout only applies once the buffers are opened.",
+      "completion": "store %(layouts_names)|buffers|windows buffers|windows || apply %(layouts_names)|buffers|windows buffers|windows || leave || del %(layouts_names)|buffers|windows buffers|windows || rename %(layouts_names) %(layouts_names)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "mouse",
+      "plugin": "core",
+      "description": "mouse control",
+      "args": "enable|disable|toggle [<delay>]",
+      "args_description": "[fmt]\nraw[enable]: enable mouse\nraw[disable]: disable mouse\nraw[toggle]: toggle mouse\ndelay: delay (in seconds) after which initial mouse state is restored (useful to temporarily disable mouse)\n\nThe mouse state is saved in option \"weechat.look.mouse\".\n\nExamples:\n  /mouse enable\n  /mouse toggle 5",
+      "completion": "enable|disable|toggle",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "mute",
+      "plugin": "core",
+      "description": "execute a command silently",
+      "args": "[-core|-current|-buffer <name>] <command>",
+      "args_description": "[fmt]\nraw[-core]: no output on WeeChat core buffer\nraw[-current]: no output on current buffer\nraw[-buffer]: no output on specified buffer\nname: full buffer name (examples: \"irc.server.libera\", \"irc.libera.#weechat\")\ncommand: command to execute silently (a \"/\" is automatically added if not found at beginning of command)\n\nIf no target is specified (\"-core\", \"-current\" or \"-buffer\"), then default is to mute all buffers.\n\nExamples:\n  /mute save\n  /mute -current msg * hi!\n  /mute -buffer irc.libera.#weechat msg #weechat hi!",
+      "completion": "-core|-current %(commands:/)|%* || -buffer %(buffers_plugins_names) %(commands:/)|%* || %(commands:/)|%*",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "pipe",
+      "plugin": "core",
+      "description": "redirect command output to a buffer, a file or a hsignal",
+      "args": "[-buffer <name>|-file <filename>|-hsignal <name>] [-color strip|keep|ansi] [-concat <separator>] [-strip <chars>] [-skipempty] [-c] [-o] [-g] [-nl] <command>",
+      "args_description": "[fmt]\nraw[-buffer]: display command output on this buffer\nname: full buffer name (examples: \"core.weechat\", \"irc.server.libera\", \"irc.libera.#weechat\")\nraw[-file]: write command output in this file\nraw[-hsignal]: send command output as hsignal; keys: \"command\", \"output\" (lines separated by separator) and \"tags\" (tags of each line separated by newline)\nraw[-color]: convert colors\nraw[-o]: send command output to the buffer as input; colors are stripped and commands are NOT executed (used only with -buffer)\nraw[-concat]: concatenate all lines displayed using a separator; chars can be escaped (example: \\x20 for space)\nraw[-strip]: strip chars from lines (beginning/end); chars can be escaped (example: \\x20 for space)\nraw[-skipempty]: skip empty lines when lines are concatenated\nraw[-c]: alias for \"-concat \\x20 -strip \\x20 -skipempty\"\nraw[-nl]: display messages in English during the command execution (do not use the current locale)\ncommand: command to execute (a \"/\" is automatically added if not found at beginning of command)\n\nIf no target is specified (\"-buffer\", \"-file\" or \"-hsignal\"), then the command output is sent on the current buffer.\n\nNote: for commands that display messages in an asynchronous way (like /exec and many IRC commands), the output will not be caught by this command.\nFor example \"/pipe /whois nick\" will NOT redirect the answer from IRC server to the current buffer.\n\nExamples:\n  write info about external libraries in a file:\n    /pipe -file /tmp/libs.txt /debug libs\n  send output of \"/debug libs\" as a single line on current channel:\n    /pipe -o -c /debug libs\n  display info about all buffers on current buffer:\n    /pipe /allbuf /eval /print ${buffer.full_name} -> ${buffer.number}. ${buffer.short_name} (${buffer})\n  send list of filters on current channel, in English:\n    /pipe -o -nl /filter",
+      "completion": "-buffer %(buffers_plugins_names) %(commands:/)|%* || -file %(filename) %(commands:/)|%* || -hsignal %- %(commands:/)|%* || -o %(commands:/)|%* || %(commands:/)|%*",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "plugin",
+      "plugin": "core",
+      "description": "list/load/unload plugins",
+      "args": "list [-o|-ol|-i|-il|<name>] || listfull [<name>] || load <filename> [<arguments>] || autoload [<arguments>] || reload [<name>|* [<arguments>]] || unload [<name>]",
+      "args_description": "[fmt]\nraw[list]: list loaded plugins\nraw[-o]: send list of loaded plugins to buffer (string in English)\nraw[-ol]: send list of loaded plugins to buffer (translated string)\nraw[-i]: copy list of loaded plugins in command line (for sending to buffer) (string in English)\nraw[-il]: copy list of loaded plugins in command line (for sending to buffer) (translated string)\nname: a plugin name\nraw[listfull]: list loaded plugins (verbose)\nraw[load]: load a plugin\nfilename: plugin (file) to load\narguments: arguments given to plugin on load\nraw[autoload]: autoload plugins in system or user directory\nraw[reload]: reload a plugin (if no name given, unload all plugins, then autoload plugins)\nraw[unload]: unload a plugin (if no name given, unload all plugins)\n\nWithout argument, this command lists loaded plugins.",
+      "completion": "list %(plugins_names)|-i|-il|-o|-ol || listfull %(plugins_names) || load %(plugins_installed) || autoload || reload %(plugins_names)|* -a|-s || unload %(plugins_names)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "print",
+      "plugin": "core",
+      "description": "display text on a buffer",
+      "args": "[-buffer <id>|<number>|<name>] [-newbuffer <name>] [-free] [-switch] [-core|-current] [-y <line>] [-escape] [-date <date>] [-tags <tags>] [-action|-error|-join|-network|-quit] [<text>] || -stdout|-stderr [<text>] || -beep",
+      "args_description": "[fmt]\nraw[-buffer]: display text in this buffer (default: buffer where command is executed)\nraw[-newbuffer]: create a new buffer and display text in this buffer\nraw[-free]: create a buffer with free content (with -newbuffer only)\nraw[-switch]: switch to the buffer\nraw[-core]: alias of \"-buffer core.weechat\"\nraw[-current]: display text on current buffer\nraw[-y]: display on a custom line (for buffer with free content only)\nline: line number for buffer with free content (first line is 0, a negative number displays after last line: -1 = after last line, -2 = two lines after last line, etc.)\nraw[-escape]: interpret escaped chars (for example \\a, \\07, \\x07)\nraw[-date]: message date, format can be:\n> -n: \"n\" seconds before now\n> +n: \"n\" seconds in the future\n> n: \"n\" seconds since the Epoch (see man time)\n> date and/or time (ISO 8601): see function \"util_parse_time\" in Plugin API reference (examples: \"11:29:09\", \"2023-12-25T10:29:09.456789Z\")\nraw[-tags]: comma-separated list of tags (see /help filter for a list of tags most commonly used)\ntext: text to display (prefix and message must be separated by \"\\t\", if text starts with \"-\", then add a \"\\\" before)\nraw[-stdout]: display text on stdout (escaped chars are interpreted)\nraw[-stderr]: display text on stderr (escaped chars are interpreted)\nraw[-beep]: alias of \"-stderr \\a\"\n\nThe options -action ... -quit use the prefix defined in options \"weechat.look.prefix_*\".\n\nFollowing escaped chars are supported:\n  \\\" \\\\ \\a \\b \\e \\f \\n \\r \\t \\v \\0ooo \\xhh \\uhhhh \\Uhhhhhhhh\n\nExamples:\n  display a reminder on core buffer with a highlight:\n    /print -core -tags notify_highlight Reminder: buy milk\n  display an error on core buffer:\n    /print -core -error Some error here\n  display message on core buffer with prefix \"abc\":\n    /print -core abc\\tThe message\n  display a message on channel #weechat:\n    /print -buffer irc.libera.#weechat Message on #weechat\n  display a snowman (U+2603):\n    /print -escape \\u2603\n  send alert (BEL):\n    /print -beep",
+      "completion": "-buffer %(buffers_numbers)|%(buffers_plugins_names) || -newbuffer || -y -1|0|1|2|3 || -free|-switch|-core|-current|-escape|-date|-tags|-action|-error|-join|-network|-quit || -stdout || -stderr || -beep",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "proxy",
+      "plugin": "core",
+      "description": "manage proxies",
+      "args": "list || add|addreplace <name> <type> <address> <port> [<username> [<password>]] || del <name>|<mask>... || set <name> <option> <value>",
+      "args_description": "[fmt]\nraw[list]: list all proxies\nraw[add]: add a new proxy\nraw[addreplace]: add or replace an existing proxy\nname: name of proxy (must be unique)\ntype: http, socks4 or socks5\naddress: IP or hostname\nport: port number\nusername: username (optional)\npassword: password (optional)\nraw[del]: delete proxies\nmask: name where wildcard \"*\" is allowed\nraw[set]: set a value for a proxy property\noption: option to change (for options list, look at /set weechat.proxy.<proxyname>.*)\nvalue: new value for option\n\nExamples:\n  add a http proxy, running on local host, port 8888:\n    /proxy add local http 127.0.0.1 8888\n  add a http proxy using IPv6 protocol only:\n    /proxy add local http ::1 8888\n    /proxy set local ipv6 force\n  add a socks5 proxy with username/password:\n    /proxy add myproxy socks5 sample.host.org 3128 myuser mypass\n  delete a proxy:\n    /proxy del myproxy",
+      "completion": "list || add|addreplace %(proxies_names) http|socks4|socks5 || del %(proxies_names)|%* || set %(proxies_names) %(proxies_options)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "quit",
+      "plugin": "core",
+      "description": "quit WeeChat",
+      "args": "[-yes] [<arguments>]",
+      "args_description": "[fmt]\nraw[-yes]: required if option \"weechat.look.confirm_quit\" is enabled\narguments: text sent with signal \"quit\" (for example irc plugin uses this text to send quit message to server)\n\nBy default when quitting the configuration files are saved (see option \"weechat.look.save_config_on_exit\") and the current layout can be saved (see option \"weechat.look.save_layout_on_exit\").",
+      "completion": "",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "reload",
+      "plugin": "core",
+      "description": "reload configuration files from disk",
+      "args": "[<file>...]",
+      "args_description": "[fmt]\nfile: configuration file to reload (without extension \".conf\")\n\nWithout argument, all files (WeeChat and plugins) are reloaded.",
+      "completion": "%(config_files)|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "repeat",
+      "plugin": "core",
+      "description": "execute a command several times",
+      "args": "[-interval <delay>[<unit>]] <count> <command>",
+      "args_description": "[fmt]\ndelay: delay between execution of commands (minimum: 1 millisecond)\nunit: optional, values are:\n> raw[us]: microseconds\n> raw[ms]: milliseconds\n> raw[s]: seconds (default)\n> raw[m]: minutes\n> raw[h]: hours\ncount: number of times to execute command\ncommand: command to execute (or text to send to buffer if command does not start with \"/\"), evaluated and the following variables are set each time the command is executed:\n> ${buffer}: buffer pointer\n> ${repeat_count}: number of times the command is executed\n> ${repeat_index}: current index (from 1 to \"count\")\n> ${repeat_index0}: current index (from 0 to \"count\" - 1)\n> ${repeat_revindex}: current index from the end (from \"count\" to 1)\n> ${repeat_revindex0}: current index from the end (from \"count\" - 1 to 0)\n> ${repeat_first}: \"1\" for the first execution, \"0\" for the others\n> ${repeat_last}: \"1\" for the last execution, \"0\" for the others\n\nNote: the command is executed on buffer where /repeat was executed (if the buffer does not exist anymore, the command is not executed).\n\nExamples:\n  scroll 2 pages up:\n    /repeat 2 /window page_up\n  print a countdown, starting at 5:\n    /repeat -interval 1 6 /print ${if:${repeat_last}?Boom!:${repeat_revindex0}}",
+      "completion": "%- %(commands:/)",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "reset",
+      "plugin": "core",
+      "description": "reset config options",
+      "args": "<option> || -mask <option>",
+      "args_description": "[fmt]\noption: name of an option\nraw[-mask]: use a mask in option (wildcard \"*\" is allowed to mass-reset options, use carefully!)\n\nExamples:\n  /reset weechat.look.item_time_format\n  /reset -mask weechat.color.*",
+      "completion": "%(config_options) || -mask %(config_options)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "save",
+      "plugin": "core",
+      "description": "save configuration files to disk",
+      "args": "[<file>...]",
+      "args_description": "[fmt]\nfile: configuration file to save (without extension \".conf\")\n\nWithout argument, all files (WeeChat and plugins) are saved.\n\nBy default all configuration files are saved to disk on /quit command (see option \"weechat.look.save_config_on_exit\").",
+      "completion": "%(config_files)|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "secure",
+      "plugin": "core",
+      "description": "manage secured data (passwords or private data encrypted in file sec.conf)",
+      "args": "passphrase <passphrase>|-delete || decrypt <passphrase>|-discard || set <name> <value> || del <name>",
+      "args_description": "[fmt]\nraw[passphrase]: change the passphrase (without passphrase, data is stored as plain text in file sec.conf)\nraw[-delete]: delete passphrase\nraw[decrypt]: decrypt data still encrypted (it happens only if passphrase was not given on startup)\nraw[-discard]: discard all data still encrypted\nraw[set]: add or change secured data\nraw[del]: delete secured data\n\nWithout argument, this command displays secured data in a new buffer.\n\nKeys on secure buffer:\n  alt+v  toggle values\n\nWhen a passphrase is used (data encrypted), it is asked by WeeChat on startup.\nIt is possible to set environment variable \"WEECHAT_PASSPHRASE\" to prevent the prompt (this same variable is used by WeeChat on /upgrade), or to set option sec.crypt.passphrase_command to read the passphrase from the output of an external command like a password manager (see /help sec.crypt.passphrase_command).\n\nSecured data with format ${sec.data.xxx} can be used in:\n  - command /eval\n  - command line argument \"--run-command\"\n  - options weechat.startup.command_{before|after}_plugins\n  - other options that may contain a password or sensitive data (for example proxy, irc server and relay); see /help on the options to check if they are evaluated.\n\nExamples:\n  set a passphrase:\n    /secure passphrase this is my passphrase\n  use program \"pass\" to read the passphrase on startup:\n    /set sec.crypt.passphrase_command \"/usr/bin/pass show weechat/passphrase\"\n  encrypt libera SASL password:\n    /secure set libera mypassword\n    /set irc.server.libera.sasl_password \"${sec.data.libera}\"\n  encrypt oftc password for nickserv:\n    /secure set oftc mypassword\n    /set irc.server.oftc.command \"/msg nickserv identify ${sec.data.oftc}\"\n  alias to ghost the nick \"mynick\":\n    /alias add ghost /eval /msg -server libera nickserv ghost mynick ${sec.data.libera}",
+      "completion": "passphrase -delete || decrypt -discard || set %(secured_data) || del %(secured_data)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "set",
+      "plugin": "core",
+      "description": "set config options and environment variables",
+      "args": "[<option> [<value>]] || diff [<option>...] || env [<variable> [<value>]]",
+      "args_description": "[fmt]\noption: name of an option (wildcard \"*\" is allowed to list options, if no value is specified)\nvalue: new value for option, according to type:\n> boolean: on, off or toggle\n> integer: number, ++number or --number\n> string: any string (\"\" for empty string)\n> color: color name, ++number or --number\ndiff: display only changed options\nenv: display or set an environment variable (\"\" to unset a variable)\n\nNote: the value \"null\" (without quotes) can be used to remove option value (undefined value). This works only for some special plugin variables.\n\nExamples:\n  /set *highlight*\n  /set weechat.look.highlight \"word\"\n  /set diff\n  /set diff irc.*\n  /set env LANG\n  /set env LANG fr_FR.UTF-8\n  /set env ABC \"\"",
+      "completion": "%(config_options) %(config_option_values) || diff %(config_options)|%* || env %(env_vars) %(env_value)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "sys",
+      "plugin": "core",
+      "description": "system actions",
+      "args": "get rlimit|rusage || malloc_trim [<size>] || suspend || waitpid <number>",
+      "args_description": "[fmt]\nraw[get]: display system info\nraw[rlimit]: display resource limits (see /help weechat.startup.sys_rlimit and \"man getrlimit\")\nraw[rusage]: display resource usage (see \"man getrusage\")\nraw[malloc_trim]: call function malloc_trim to release free memory from the heap\nsize: amount of free space to leave untrimmed at the top of the heap (default is 0: only the minimum amount of memory is maintained at the top of the heap)\nraw[suspend]: suspend WeeChat and go back to the shell, by sending signal SIGTSTP to the WeeChat process\nraw[waitpid]: acknowledge the end of children processes (to prevent \"zombie\" processes)\nnumber: number of processes to clean",
+      "completion": "get rlimit|rusage || malloc_trim || suspend || waitpid 1|10|100|1000",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "toggle",
+      "plugin": "core",
+      "description": "toggle value of a config option",
+      "args": "<option> [<value>...]",
+      "args_description": "[fmt]\noption: name of an option\nvalue: possible values for the option (values are split like the shell command arguments: quotes can be used to preserve spaces at the beginning/end of values)\n\nBehavior:\n  - only an option of type boolean or string can be toggled without a value:\n    - boolean: toggle between on/off according to current value\n    - string: toggle between empty string and default value (works only if empty string is allowed for the option)\n  - with a single value given, toggle between this value and the default value of option\n  - with multiple values given, toggle between these values: the value used is the one following the current value of option; if the current value of option is not in list, the first value in the list is used\n  - the special value \"null\" can be given, but only as first value in the list and without quotes around.\n\nExamples:\n  toggle display of time in chat area (without displaying the new value used):\n    /mute /toggle weechat.look.buffer_time_format\n  switch format of time in chat area (with seconds, without seconds, disabled):\n    /toggle weechat.look.buffer_time_format \"%H:%M:%S\" \"%H:%M\" \"\"\n  toggle autojoin of #weechat channel on libera server:\n    /toggle irc.server.libera.autojoin null #weechat",
+      "completion": "%(config_options) %(config_option_values)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "unset",
+      "plugin": "core",
+      "description": "unset/reset config options",
+      "args": "<option> || -mask <option>",
+      "args_description": "[fmt]\noption: name of an option\nraw[-mask]: use a mask in option (wildcard \"*\" is allowed to mass-reset options, use carefully!)\n\nAccording to option, it's reset (for standard options) or removed (for optional settings, like server values).\n\nExamples:\n  /unset weechat.look.item_time_format\n  /unset -mask weechat.color.*",
+      "completion": "%(config_options) || -mask %(config_options)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "upgrade",
+      "plugin": "core",
+      "description": "save WeeChat session and reload the WeeChat binary without disconnecting from servers",
+      "args": "[-yes] [<path_to_binary>|-save|-quit] || -o|-ol",
+      "args_description": "[fmt]\nraw[-yes]: required if option \"weechat.look.confirm_upgrade\" is enabled\npath_to_binary: path to WeeChat binary (default is current binary)\nraw[-dummy]: do nothing (option used to prevent accidental completion with \"-quit\")\nraw[-save]: only save the session, neither quit nor reload WeeChat; the configuration files are not saved (if needed you can use /save before this command)\nraw[-quit]: close *ALL* connections, save session and quit WeeChat, which makes possible a delayed restoration (see below)\nraw[-o]: send number of upgrades and date of first/last start to current buffer as input (English string)\nraw[-ol]: send number of upgrades and date of first/last start to current buffer as input (translated string)\n\nThis command upgrades and reloads a running WeeChat session. The new WeeChat binary must have been compiled or installed with a package manager before running this command.\n\nNote: TLS connections are lost during upgrade (except with -save), because the reload of TLS sessions is currently not possible with GnuTLS. There is automatic reconnection after upgrade.\n\nImportant: use of option \"-save\" can be dangerous, it is recommended to use only /upgrade (or with \"-quit\") for a standard upgrade and a restart; the option \"-save\" can be used to save the session regularly and restore it in case of after abnormal exit (power outage, crash, etc.).\n\nUpgrade process has 4 steps:\n  1. save session into files for core and plugins (buffers, history, ..)\n  2. unload all plugins (configuration files (*.conf) are written on disk)\n  3. save WeeChat configuration (weechat.conf)\n  4. execute new WeeChat binary and reload session.\n\nWith option \"-quit\", the process is:\n  1. close *ALL* connections (irc, xfer, relay, ...)\n  2. save session into files (*.upgrade)\n  3. unload all plugins\n  4. save WeeChat configuration\n  5. quit WeeChat\n\nWith option \"-save\", the process is:\n  1. save session into files (*.upgrade) with a disconnected state for IRC servers and Relay clients (but no disconnection is made)\n\nWith -quit or -save, you can restore the session later with this command: weechat --upgrade\nIMPORTANT: you must restore the session with exactly same configuration (files *.conf) and if possible the same WeeChat version (or a more recent one).\nIt is possible to restore WeeChat session on another machine if you copy the content of WeeChat home directories (see /debug dirs).",
+      "completion": "%(filename)|-dummy|-o|-ol|-save|-quit",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "uptime",
+      "plugin": "core",
+      "description": "show WeeChat uptime",
+      "args": "[-o|-ol]",
+      "args_description": "[fmt]\nraw[-o]: send uptime to current buffer as input (English string)\nraw[-ol]: send uptime to current buffer as input (translated string)",
+      "completion": "-o|-ol",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "version",
+      "plugin": "core",
+      "description": "show WeeChat version and compilation date",
+      "args": "[-o|-ol] [-v]",
+      "args_description": "[fmt]\nraw[-o]: send version to current buffer as input (English string)\nraw[-ol]: send version to current buffer as input (translated string)\nraw[-v]: verbose mode: display information about upgrades of WeeChat with /upgrade\n\nThe default alias /v can be used to execute this command on all buffers (otherwise the irc command /version is used on irc buffers).",
+      "completion": "-o|-ol|-v|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "wait",
+      "plugin": "core",
+      "description": "schedule a command execution in future",
+      "args": "<number>[<unit>] <command>",
+      "args_description": "[fmt]\nnumber: amount of time to wait (minimum: 1 millisecond)\nunit: optional, values are:\n> raw[us]: microseconds\n> raw[ms]: milliseconds\n> raw[s]: seconds (default)\n> raw[m]: minutes\n> raw[h]: hours\ncommand: command to execute (or text to send to buffer if command does not start with \"/\")\n\nNote: the command is executed on buffer where /wait was executed (if the buffer does not exist anymore, the command is not executed).\n\nExamples:\n  join channel #test in 10 seconds:\n    /wait 10 /join #test\n  set away in 15 minutes:\n    /wait 15m /away -all I'm away\n  say \"hello\" in 2 minutes:\n    /wait 2m hello",
+      "completion": "%- %(commands:/)",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "window",
+      "plugin": "core",
+      "description": "manage windows",
+      "args": "list || -1|+1|b#|up|down|left|right [-window <number>] || <number> || splith|splitv [-window <number>] [<pct>] || resize [-window <number>] [h|v][+|-]<pct> || balance || merge [-window <number>] [all] || close [-window <number>] || page_up|page_down [-window <number>] || refresh || scroll [-window <number>] [+|-]<value>[s|m|h|d|M|y] || scroll_horiz [-window <number>] [+|-]<value>[%] || scroll_up|scroll_down|scroll_top|scroll_bottom|scroll_beyond_end|scroll_previous_highlight|scroll_next_highlight|scroll_unread [-window <number>] || swap [-window <number>] [up|down|left|right] || zoom [-window <number>] || bare [<delay>]",
+      "args_description": "[fmt]\nraw[list]: list opened windows (without argument, this list is displayed)\nraw[-1]: jump to previous window\nraw[+1]: jump to next window\nraw[b#]: jump to next window displaying buffer number #\nraw[up]: switch to window above current one\nraw[down]: switch to window below current one\nraw[left]: switch to window on the left\nraw[right]: switch to window on the right\nnumber: window number (see /window list)\nraw[splith]: split current window horizontally (to undo: /window merge)\nraw[splitv]: split current window vertically (to undo: /window merge)\nraw[resize]: resize window size, new size is <pct> percentage of parent window; if \"h\" or \"v\" is specified, the resize affects the nearest parent window with a split of this type (horizontal/vertical)\nraw[balance]: balance the sizes of all windows\nraw[merge]: merge window with another (raw[all] = keep only one window)\nraw[close]: close window\nraw[page_up]: scroll one page up\nraw[page_down]: scroll one page down\nraw[refresh]: refresh screen\nraw[scroll]: scroll a number of lines (+/-N) or with time: s=seconds, m=minutes, h=hours, d=days, M=months, y=years\nraw[scroll_horiz]: scroll horizontally a number of columns (+/-N) or percentage of window size (this scrolling is possible only on buffers with free content)\nraw[scroll_up]: scroll a few lines up\nraw[scroll_down]: scroll a few lines down\nraw[scroll_top]: scroll to top of buffer\nraw[scroll_bottom]: scroll to bottom of buffer\nraw[scroll_beyond_end]: scroll beyond the end of buffer\nraw[scroll_previous_highlight]: scroll to previous highlight\nraw[scroll_next_highlight]: scroll to next highlight\nraw[scroll_unread]: scroll to unread marker\nraw[swap]: swap buffers of two windows (with optional direction for target window)\nraw[zoom]: zoom on window\nraw[bare]: toggle bare display (with optional delay in seconds for automatic return to standard display mode)\n\nFor splith and splitv, pct is a percentage which represents size of new window, computed with current window as size reference. For example 25 means create a new window with size = current_size / 4\n\nExamples:\n  /window b1\n  /window scroll -2\n  /window scroll -2d\n  /window scroll -d\n  /window zoom -window 2\n  /window splith 30\n  /window resize 75\n  /window resize v+10\n  /window bare 2",
+      "completion": "list || -1 -window %(windows_numbers) || +1 -window %(windows_numbers) || up -window %(windows_numbers) || down -window %(windows_numbers) || left -window %(windows_numbers) || right -window %(windows_numbers) || splith -window %(windows_numbers) || splitv -window %(windows_numbers) || resize -window %(windows_numbers) || balance || page_up -window %(windows_numbers) || page_down -window %(windows_numbers) || refresh || scroll -window %(windows_numbers) || scroll_horiz -window %(windows_numbers) || scroll_up -window %(windows_numbers) || scroll_down -window %(windows_numbers) || scroll_top -window %(windows_numbers) || scroll_bottom -window %(windows_numbers) || scroll_beyond_end -window %(windows_numbers) || scroll_previous_highlight -window %(windows_numbers) || scroll_next_highlight -window %(windows_numbers) || scroll_unread  -window %(windows_numbers) || swap up|down|left|right|-window %(windows_numbers) || zoom -window %(windows_numbers) || merge all|-window %(windows_numbers) || close -window %(windows_numbers) || bare || %(windows_numbers)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "exec",
+      "plugin": "exec",
+      "description": "execute external commands",
+      "args": "-list || [-sh|-nosh] [-bg|-nobg] [-stdin|-nostdin] [-buffer <name>] [-l|-o|-oc|-n|-nf] [-oerr] [-cl|-nocl] [-sw|-nosw] [-ln|-noln] [-flush|-noflush] [-color ansi|auto|irc|weechat|strip] [-rc|-norc] [-timeout <timeout>] [-name <name>] [-pipe <command>] [-hsignal <name>] <command> || -in <id> <text> || -inclose <id> [<text>] || -signal <id> <signal> || -kill <id> || -killall || -set <id> <property> <value> || -del <id>|-all [<id>...]",
+      "args_description": "[fmt]\nraw[-list]: list commands\nraw[-sh]: use the shell to execute the command, many commands can be piped (WARNING: use this option ONLY if all arguments are safe, see option -nosh)\nraw[-nosh]: do not use the shell to execute the command (required if the command has some unsafe data, for example the content of a message from another user) (default)\nraw[-bg]: run process in background: do not display process output neither return code (not compatible with options -o/-oc/-n/-nf/-pipe/-hsignal)\nraw[-nobg]: catch process output and display return code (default)\nraw[-stdin]: create a pipe for sending data to the process (with /exec -in/-inclose)\nraw[-nostdin]: do not create a pipe for stdin (default)\nraw[-buffer]: display/send output of command on this buffer (if the buffer is not found, a new buffer with name \"exec.exec.xxx\" is created)\nraw[-l]: display locally output of command on buffer (default)\nraw[-o]: send output of command to the buffer without executing commands (not compatible with options -bg/-pipe/-hsignal)\nraw[-oc]: send output of command to the buffer and execute commands (lines starting with \"/\" or another custom command char) (not compatible with options -bg/-pipe/-hsignal)\nraw[-n]: display output of command in a new buffer (not compatible with options -bg/-pipe/-hsignal)\nraw[-nf]: display output of command in a new buffer with free content (no word-wrap, no limit on number of lines) (not compatible with options -bg/-pipe/-hsignal)\nraw[-oerr]: also send stderr (error output) to the buffer (can be used only with options -o and -oc)\nraw[-cl]: clear the new buffer before displaying output\nraw[-nocl]: append to the new buffer without clear (default)\nraw[-sw]: switch to the output buffer (default)\nraw[-nosw]: don't switch to the output buffer\nraw[-ln]: display line numbers (default in new buffer only)\nraw[-noln]: don't display line numbers\nraw[-flush]: display output of command in real time (default)\nraw[-noflush]: display output of command after its end\nraw[-color]: action on ANSI colors in output:\n> raw[ansi]: keep ANSI codes as-is\n> raw[auto]: convert ANSI colors to WeeChat/IRC (default)\n> raw[irc]: convert ANSI colors to IRC colors\n> raw[weechat]: convert ANSI colors to WeeChat colors\n> raw[strip]: remove ANSI colors\nraw[-rc]: display return code (default)\nraw[-norc]: don't display return code\nraw[-timeout]: set a timeout for the command (in seconds)\nraw[-name]: set a name for the command (to name it later with /exec)\nraw[-pipe]: send the output to a WeeChat/plugin command (line by line); if there are spaces in command/arguments, enclose them with double quotes; variable $line is replaced by the line (by default the line is added after the command, separated by a space) (not compatible with options -bg/-o/-oc/-n/-nf)\nraw[-hsignal]: send the output as a hsignal (to be used for example in a trigger) (not compatible with options -bg/-o/-oc/-n/-nf)\ncommand: the command to execute; if beginning with \"url:\", the shell is disabled and the content of URL is downloaded and sent as output\nid: command identifier: either its number or name (if set with \"-name xxx\")\nraw[-in]: send text on standard input of process\nraw[-inclose]: same as -in, but stdin is closed after (and text is optional: without text, the stdin is just closed)\nraw[-signal]: send a signal to the process; the signal can be an integer or one of these names: hup, int, quit, kill, term, usr1, usr2\nraw[-kill]: alias of \"-signal <id> kill\"\nraw[-killall]: kill all running processes\nraw[-set]: set a hook property (see function hook_set in plugin API reference)\nproperty: hook property\nvalue: new value for hook property\nraw[-del]: delete a terminated command\nraw[-all]: delete all terminated commands\n\nDefault options can be set in the option exec.command.default_options.\n\nExamples:\n  /exec -n ls -l /tmp\n  /exec -sh -n ps xu | grep weechat\n  /exec -n -norc url:https://pastebin.com/raw.php?i=xxxxxxxx\n  /exec -nf -noln links -dump https://weechat.org/files/doc/weechat/devel/weechat_user.en.html\n  /exec -o uptime\n  /exec -pipe \"/print Machine uptime:\" uptime\n  /exec -n tail -f /var/log/messages\n  /exec -kill 0",
+      "completion": "-list || -sh|-nosh|-bg|-nobg|-stdin|-nostdin|-buffer|-l|-o|-n|-nf|-cl|-nocl|-sw|-nosw|-ln|-noln|-flush|-noflush|-color|-timeout|-name|-pipe|-hsignal|%* || -in|-inclose|-signal|-kill %(exec_commands_ids) || -killall || -set %(exec_commands_ids) stdin|stdin_close|signal || -del %(exec_commands_ids)|-all %(exec_commands_ids)|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "fifo",
+      "plugin": "fifo",
+      "description": "fifo plugin configuration",
+      "args": "enable|disable|toggle",
+      "args_description": "[fmt]\nraw[enable]: enable FIFO pipe\nraw[disable]: disable FIFO pipe\nraw[toggle]: toggle FIFO pipe\n\nFIFO pipe is used as remote control of WeeChat: you can send commands or text to the FIFO pipe from your shell.\nBy default the FIFO pipe is called weechat_fifo_xxx (where xxx is the WeeChat process id) and located in the WeeChat runtime directory (see /debug dirs).\n\nThe expected format is one of:\n  plugin.buffer *text or command here\n  *text or command here\n\nFor example to change your libera nick:\n  echo 'irc.server.libera */nick newnick' >/run/user/1000/weechat/weechat_fifo_12345\n\nPlease read the user's guide for more info and examples.",
+      "completion": "enable|disable|toggle",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "fset",
+      "plugin": "fset",
+      "description": "fast set WeeChat and plugins options",
+      "args": "-bar || -refresh || -up|-down [<number>] || -left|-right [<percent>] || -go <line>|end || -toggle || -add [<value>] || -reset || -unset || -set || -setnew || -append || -mark || -format || -export [-help|-nohelp] <filename> || -import <filename> || <filter>",
+      "args_description": "[fmt]\nraw[-bar]: add the help bar\nraw[-refresh]: refresh list of options, then whole screen (command: /window refresh)\nraw[-up]: move the selected line up by \"number\" lines\nraw[-down]: move the selected line down by \"number\" lines\nraw[-left]: scroll the buffer by \"percent\" of width on the left\nraw[-right]: scroll the buffer by \"percent\" of width on the right\nraw[-go]: select a line by number, first line number is 0 (\"end\" to select the last line)\nraw[-toggle]: toggle the boolean value\nraw[-add]: add \"value\" (which can be a negative number) for integers, colors and enums, set/append to value for other types (set for a negative value, append for a positive value)\nraw[-reset]: reset the value of option\nraw[-unset]: unset the option\nraw[-set]: add the /set command in input to edit the value of option (move the cursor at the beginning of value)\nraw[-setnew]: add the /set command in input to edit a new value for the option\nraw[-append]: add the /set command to append something in the value of option (move the cursor at the end of value)\nraw[-mark]: toggle mark\nraw[-format]: switch to the next available format\nraw[-export]: export the options and values displayed to a file (each line has format: \"/set name value\" or \"/unset name\")\nraw[-import]: import the options from a file (all lines containing commands are executed)\nraw[-help]: force writing of help on options in exported file (see /help fset.look.export_help_default)\nraw[-nohelp]: do not write help on options in exported file (see /help fset.look.export_help_default)\nfilter: set a new filter to see only matching options (this filter can be used as input in fset buffer as well); allowed formats are:\n> `*`: show all options (no filter)\n> `xxx`: show only options with \"xxx\" in name\n> `f:xxx`: show only configuration file \"xxx\"\n> `t:xxx`: show only type \"xxx\" (bool/int/str/col/enum or boolean/integer/string/color/enum)\n> `d`: show only changed options\n> `d:xxx`: show only changed options with \"xxx\" in name\n> `d=xxx`: show only changed options with \"xxx\" in value\n> `d==xxx`: show only changed options with exact value \"xxx\"\n> `h=xxx`: show only options with \"xxx\" in description (translated)\n> `he=xxx`: show only options with \"xxx\" in description (in English)\n> `=xxx`: show only options with \"xxx\" in value\n> `==xxx`: show only options with exact value \"xxx\"\n> `c:xxx`: show only options matching the evaluated condition \"xxx\", using following variables: file, section, option, name, parent_name, type, type_en, type_short (bool/int/str/col/enum), type_tiny (b/i/s/c/e), default_value, default_value_undef, value, quoted_value, value_undef, value_changed, parent_value, min, max, description, description2, description_en, description_en2, string_values, allowed_values\n\nThe lines with options are displayed using string evaluation (see /help eval for the format), with these options:\n  - fset.format.option1: first format for an option\n  - fset.format.option2: second format for an option\n\nThe following variables can be used in these options:\n  - option data, with color and padded by spaces on the right:\n    - ${file}: configuration file (for example \"weechat\" or \"irc\")\n    - ${section}: section\n    - ${option}: option name\n    - ${name}: full option name (file.section.option)\n    - ${parent_name}: parent option name\n    - ${type}: option type (translated)\n    - ${type_en}: option type (in English)\n    - ${type_short}: short option type (bool/int/str/col/enum)\n    - ${type_tiny}: tiny option type (b/i/s/c/e)\n    - ${default_value}: option default value\n    - ${default_value_undef}: \"1\" if default value is null, otherwise \"0\"\n    - ${value}: option value\n    - ${value_undef}: \"1\" if value is null, otherwise \"0\"\n    - ${value_changed}: \"1\" if value is different from default value, otherwise \"0\"\n    - ${value2}: option value, with inherited value if null\n    - ${parent_value}: parent option value\n    - ${min}: min value\n    - ${max}: max value\n    - ${description}: option description (translated)\n    - ${description2}: option description (translated), \"(no description)\" (translated) if there's no description\n    - ${description_en}: option description (in English)\n    - ${description_en2}: option description (in English), \"(no description)\" if there's no description\n    - ${string_values}: string values allowed for set of an enum option\n    - ${allowed_values}: allowed values\n    - ${marked}: \"1\" if option is marked, otherwise \"0\"\n    - ${index}: index of option in list\n  - option data, with color but no spaces:\n    - same names prefixed by underscore, for example: ${_name}, ${_type}, ...\n  - option data, raw format (no colors/spaces):\n    - same names prefixed by two underscores, for example: ${__name}, ${__type}, ...\n  - option data, only spaces:\n    - same names prefixed with \"empty_\", for example: ${empty_name}, ${empty_type}\n  - other data:\n    - ${selected_line}: \"1\" if the line is selected, otherwise \"0\"\n    - ${newline}: insert a new line at point, so the option is displayed on multiple lines\n\nFor keys, input and mouse actions on the buffer, see key bindings in User's guide.\n\nNote: if input has one or more leading spaces, the following text is interpreted as a filter, without the spaces. For example \" q\" searches all options with \"q\" inside name while \"q\" closes the fset buffer.\n\nExamples:\n  /fset d:irc.*\n  /fset nicklist\n  /fset =red\n  /fset ==red\n  /fset c:${file} == irc && ${type_en} == integer",
+      "completion": "-bar || -refresh || -up 1|2|3|4|5 || -down 1|2|3|4|5 || -left 10|20|30|40|50|60|70|80|90|100 || -right 10|20|30|40|50|60|70|80|90|100 || -go 0|end || -toggle || -add -1|1 || -reset || -unset || -set || -setnew || -append || -mark || -format || -export -help|-nohelp|%(filename) %(filename) || -import %(filename) || *|c:|f:|s:|d|d:|d=|d==|=|==|%(fset_options)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "action",
+      "plugin": "irc",
+      "description": "send a CTCP action to a nick or channel",
+      "args": "[-server <server>] <target>[,<target>...] <text>",
+      "args_description": "[fmt]\nserver: send to this server (internal name)\ntarget: nick or channel (may be mask, \"*\" = current channel)\ntext: text to send",
+      "completion": "-server %(irc_servers) %(nicks)|* || %(nicks)|*",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "admin",
+      "plugin": "irc",
+      "description": "find information about the administrator of the server",
+      "args": "[<target>]",
+      "args_description": "[fmt]\ntarget: server name",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "allchan",
+      "plugin": "irc",
+      "description": "execute a command on all channels of all connected servers",
+      "args": "[-current] [-parted|-all] [-exclude=<channel>[,<channel>...]] <command> || [-current] [-parted|-all] -include=<channel>[,<channel>...] <command>",
+      "args_description": "[fmt]\nraw[-current]: execute command for channels of current server only\nraw[-parted]: execute command on parted channels (by default: execute command on active channels only)\nraw[-all]: execute command on all channels (active and parted)\nraw[-exclude]: exclude some channels (wildcard \"*\" is allowed)\nraw[-include]: include only some channels (wildcard \"*\" is allowed)\ncommand: command to execute (or text to send to buffer if command does not start with \"/\")\n\nCommand and arguments are evaluated (see /help eval), the following variables are replaced:\n  $server: server name\n  $channel: channel name\n  $nick: nick on server\n  ${irc_server.xxx}: variable xxx in server\n  ${irc_channel.xxx}: variable xxx in channel\n\nExamples:\n  execute \"/me is testing\" on all channels:\n    /allchan /me is testing\n  say \"hello\" everywhere but not on #weechat:\n    /allchan -exclude=#weechat hello\n  say \"hello\" everywhere but not on #weechat and channels beginning with #linux:\n    /allchan -exclude=#weechat,#linux* hello\n  say \"hello\" on all channels beginning with #linux:\n    /allchan -include=#linux* hello\n  close all buffers with parted channels:\n    /allchan -parted /close",
+      "completion": "-current|-parted|-all",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "allpv",
+      "plugin": "irc",
+      "description": "execute a command on all private buffers of all connected servers",
+      "args": "[-current] [-exclude=<nick>[,<nick>...]] <command> || [-current] -include=<nick>[,<nick>...] <command>",
+      "args_description": "[fmt]\nraw[-current]: execute command for private buffers of current server only\nraw[-exclude]: exclude some nicks (wildcard \"*\" is allowed)\nraw[-include]: include only some nicks (wildcard \"*\" is allowed)\ncommand: command to execute (or text to send to buffer if command does not start with \"/\")\n\nCommand and arguments are evaluated (see /help eval), the following variables are replaced:\n  $server: server name\n  $channel: channel name\n  $nick: nick on server\n  ${irc_server.xxx}: variable xxx in server\n  ${irc_channel.xxx}: variable xxx in channel\n\nExamples:\n  execute \"/me is testing\" on all private buffers:\n    /allpv /me is testing\n  say \"hello\" everywhere but not for nick foo:\n    /allpv -exclude=foo hello\n  say \"hello\" everywhere but not for nick foo and nicks beginning with bar:\n    /allpv -exclude=foo,bar* hello\n  say \"hello\" for all nicks beginning with bar:\n    /allpv -include=bar* hello\n  close all private buffers:\n    /allpv /close",
+      "completion": "-current",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "allserv",
+      "plugin": "irc",
+      "description": "execute a command on all connected servers",
+      "args": "[-exclude=<server>[,<server>...]] <command> || -include=<server>[,<server>...] <command>",
+      "args_description": "[fmt]\nraw[-exclude]: exclude some servers (wildcard \"*\" is allowed)\nraw[-include]: include only some servers (wildcard \"*\" is allowed)\ncommand: command to execute (or text to send to buffer if command does not start with \"/\")\n\nCommand and arguments are evaluated (see /help eval), the following variables are replaced:\n  $server: server name\n  $nick: nick on server\n  ${irc_server.xxx}: variable xxx in server\n\nExamples:\n  change nick on all servers:\n    /allserv /nick newnick\n  do a whois on my nick on all servers:\n    /allserv /whois $nick",
+      "completion": "",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "auth",
+      "plugin": "irc",
+      "description": "authenticate with SASL",
+      "args": "[<username> <password>]",
+      "args_description": "[fmt]\nusername: SASL username (content is evaluated, see /help eval; server options are evaluated with ${irc_server.xxx} and ${server} is replaced by the server name)\npassword: SASL password or path to file with private key (content is evaluated, see /help eval; server options are evaluated with ${irc_server.xxx} and ${server} is replaced by the server name)\n\nIf username and password are not provided, the values from server options \"sasl_username\" and \"sasl_password\" (or \"sasl_key\") are used.\n\nExamples:\n  authenticate with username/password defined in the server:\n    /auth\n  authenticate as a different user:\n    /auth user2 password2\n  authenticate as a different user with mechanism ecdsa-nist256p-challenge:\n    /auth user2 ${weechat_config_dir}/ecdsa2.pem",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "autojoin",
+      "plugin": "irc",
+      "description": "configure the \"autojoin\" server option",
+      "args": "add [<channel>...] || addraw <channel1>[,<channel2>...] [<key1>[,<key2>...]] || del [<channel>...] || apply || join || sort [buffer]",
+      "args_description": "[fmt]\nraw[add]: add current channel or a list of channels (with optional keys) to the autojoin option; if you are on the channel and the key is not provided, the key is read in the channel\nraw[addraw]: use the IRC raw format (same as /join command): all channels separated by commas, optional keys separated by commas\nraw[del]: delete current channel or a list of channels from the autojoin option\nchannel: channel name\nkey: key for the channel\nraw[apply]: set currently joined channels in the autojoin option\nraw[join]: join the channels in the autojoin option\nraw[sort]: sort alphabetically channels in the autojoin option; with \"buffer\": first sort by buffer number, then alphabetically\n\nExamples:\n  /autojoin add\n  /autojoin add #test\n  /autojoin add #chan1 #chan2\n  /allchan /autojoin add\n  /autojoin addraw #chan1,#chan2,#chan3 key1,key2\n  /autojoin del\n  /autojoin del #chan1\n  /autojoin apply\n  /autojoin join\n  /autojoin sort\n  /autojoin sort buffer",
+      "completion": "add %(irc_channels)|%* || addraw %(irc_channels) %- || del %(irc_channels_autojoin)|%* || apply || join || sort buffer",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "ban",
+      "plugin": "irc",
+      "description": "ban nicks or hosts",
+      "args": "[<channel>] [<nick>...]",
+      "args_description": "[fmt]\nchannel: channel name\nnick: nick or host\n\nWithout argument, this command displays the ban list for current channel.",
+      "completion": "%(irc_channel_nicks_hosts)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "cap",
+      "plugin": "irc",
+      "description": "client capability negotiation",
+      "args": "ls || list || req|ack [<capability>...] || end",
+      "args_description": "[fmt]\nraw[ls]: list the capabilities supported by the server\nraw[list]: list the capabilities currently enabled\nraw[req]: request a new capability or remove a capability (if starting with \"-\", for example: \"-multi-prefix\")\nraw[ack]: acknowledge capabilities which require client-side acknowledgement\nraw[end]: end the capability negotiation\n\nWithout argument, \"ls\" and \"list\" are sent.\n\nCapabilities supported by WeeChat are: account-notify, account-tag, away-notify, batch, cap-notify, chghost, draft/multiline, echo-message, extended-join, invite-notify, message-tags, multi-prefix, server-time, setname, userhost-in-names.\n\nThe capabilities to automatically enable on servers can be set in option irc.server_default.capabilities (or by server in option irc.server.xxx.capabilities).\n\nExamples:\n  display supported and enabled capabilities:\n    /cap\n  request capabilities multi-prefix and away-notify:\n    /cap req multi-prefix away-notify\n  request capability extended-join, remove capability multi-prefix:\n    /cap req extended-join -multi-prefix\n  remove capability away-notify:\n    /cap req -away-notify",
+      "completion": "ls || list || req account-notify|account-tag|away-notify|batch|cap-notify|chghost|draft/multiline|echo-message|extended-join|invite-notify|message-tags|multi-prefix|server-time|setname|userhost-in-names|%* || ack account-notify|account-tag|away-notify|batch|cap-notify|chghost|draft/multiline|echo-message|extended-join|invite-notify|message-tags|multi-prefix|server-time|setname|userhost-in-names|%* || end",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "connect",
+      "plugin": "irc",
+      "description": "connect to IRC server(s)",
+      "args": "[<server>...] [-<option>[=<value>]] [-no<option>] [-nojoin] [-switch] || -all|-auto|-open [-nojoin] [-switch]",
+      "args_description": "[fmt]\nserver: server name, which can be:\n> - internal server name (added by /server add, recommended usage)\n> - hostname/port or IP/port, port is 6697 by default for TLS, 6667 otherwise\n> - URL with format: irc[6][s]://[nickname[:password]@]irc.example.org[:port][/#channel1][,#channel2[...]]\n> Note: for an address/IP/URL, a temporary server is added (NOT SAVED), see /help irc.look.temporary_servers\noption: set option for server (for boolean option, value can be omitted)\nraw[nooption]: set boolean option to \"off\" (for example: -notls)\nraw[-all]: connect to all servers defined in configuration\nraw[-auto]: connect to servers with autoconnect enabled\nraw[-open]: connect to all opened servers that are not currently connected\nraw[-nojoin]: do not join any channel (even if autojoin is enabled on server)\nraw[-switch]: switch to next server address\n\nTo disconnect from a server or stop any connection attempt, use command /disconnect.\n\nExamples:\n  /connect libera\n  /connect irc.oftc.net\n  /connect irc.oftc.net/6667 -notls\n  /connect irc6.oftc.net/9999 -ipv6=force\n  /connect my.server.org -password=test\n  /connect irc://nick@irc.oftc.net/#channel\n  /connect -switch",
+      "completion": "%(irc_servers)|-all|-auto|-open|-nojoin|-switch|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "ctcp",
+      "plugin": "irc",
+      "description": "send a CTCP message (Client-To-Client Protocol)",
+      "args": "[-server <server>] <target>[,<target>...] <type> [<arguments>]",
+      "args_description": "[fmt]\nserver: send to this server (internal name)\ntarget: nick or channel (\"*\" = current channel)\ntype: CTCP type (examples: \"version\", \"ping\", etc.)\narguments: arguments for CTCP\n\nExamples:\n  /ctcp toto time\n  /ctcp toto version\n  /ctcp * version",
+      "completion": "-server %(irc_servers) %(irc_channel)|%(nicks)|* action|clientinfo|ping|source|time|version || %(irc_channel)|%(nicks)|* action|clientinfo|ping|source|time|version",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "cycle",
+      "plugin": "irc",
+      "description": "leave and rejoin a channel",
+      "args": "[<channel>[,<channel>...]] [<message>]",
+      "args_description": "[fmt]\nchannel: channel name\nmessage: part message (displayed to other users)",
+      "completion": "%(irc_msg_part)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "dcc",
+      "plugin": "irc",
+      "description": "start a DCC (passive file transfer or direct chat)",
+      "args": "chat <nick> || send <nick> <file>",
+      "args_description": "[fmt]\nnick: nick\nfile: filename (on local host)\n\nExamples:\n  /dcc chat toto\n  /dcc send toto /home/foo/bar.txt",
+      "completion": "chat %(nicks) || send %(nicks) %(filename:${modifier:eval_path_home,directory=data,${xfer.file.upload_path}})",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "dehalfop",
+      "plugin": "irc",
+      "description": "remove channel half-operator status from nick(s)",
+      "args": "<nick>... || * -yes",
+      "args_description": "[fmt]\nnick: nick or mask (wildcard \"*\" is allowed)\n*: remove channel half-operator status from everybody on channel except yourself",
+      "completion": "%(nicks)|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "deop",
+      "plugin": "irc",
+      "description": "remove channel operator status from nick(s)",
+      "args": "<nick>... || * -yes",
+      "args_description": "[fmt]\nnick: nick or mask (wildcard \"*\" is allowed)\n*: remove channel operator status from everybody on channel except yourself",
+      "completion": "%(nicks)|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "devoice",
+      "plugin": "irc",
+      "description": "remove voice from nick(s)",
+      "args": "<nick>... || * -yes",
+      "args_description": "[fmt]\nnick: nick or mask (wildcard \"*\" is allowed)\n*: remove voice from everybody on channel",
+      "completion": "%(nicks)|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "die",
+      "plugin": "irc",
+      "description": "shutdown the server",
+      "args": "[<target>]",
+      "args_description": "[fmt]\ntarget: server name",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "disconnect",
+      "plugin": "irc",
+      "description": "disconnect from one or all IRC servers",
+      "args": "[<server>|-all|-pending [<reason>]]",
+      "args_description": "[fmt]\nserver: internal server name\nraw[-all]: disconnect from all servers\nraw[-pending]: cancel auto-reconnection on servers currently reconnecting\nreason: reason for the \"quit\"",
+      "completion": "%(irc_servers)|-all|-pending",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "halfop",
+      "plugin": "irc",
+      "description": "give channel half-operator status to nick(s)",
+      "args": "<nick>... || * -yes",
+      "args_description": "[fmt]\nnick: nick or mask (wildcard \"*\" is allowed)\n*: give channel half-operator status to everybody on channel",
+      "completion": "%(nicks)|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "ignore",
+      "plugin": "irc",
+      "description": "ignore nicks/hosts from servers or channels",
+      "args": "list || add|addreplace [re:]<nick> [<server> [<channel>]] || del <number>|-all",
+      "args_description": "[fmt]\nraw[list]: list all ignores\nraw[add]: add an ignore\nraw[addreplace]: add or replace an existing ignore\nnick: nick or hostname; can be a POSIX extended regular expression if \"re:\" is given or a mask using \"*\" to replace zero or more chars (the regular expression can start with \"(?-i)\" to become case-sensitive)\nraw[del]: delete an ignore\nnumber: number of ignore to delete (look at list to find it)\nraw[-all]: delete all ignores\nserver: internal server name where ignore is working\nchannel: channel name where ignore is working\n\nNote: if option irc.look.ignore_tag_messages is enabled, the ignored messages are just tagged with \"irc_ignored\" instead of being completely removed.\n\nExamples:\n  /ignore add toto\n  /ignore add toto@domain.com libera\n  /ignore add toto*@*.domain.com libera #weechat",
+      "completion": "list || add|addreplace %(irc_channel_nicks_hosts) %(irc_servers) %(irc_channels) %- || del %(irc_ignores_numbers)|-all %-",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "info",
+      "plugin": "irc",
+      "description": "get information describing the server",
+      "args": "[<target>]",
+      "args_description": "[fmt]\ntarget: server name",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "invite",
+      "plugin": "irc",
+      "description": "invite a nick on a channel",
+      "args": "<nick>... [<channel>]",
+      "args_description": "[fmt]\nnick: nick\nchannel: channel name",
+      "completion": "%(nicks) %(irc_server_channels)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "ison",
+      "plugin": "irc",
+      "description": "check if a nick is currently on IRC",
+      "args": "<nick>...",
+      "args_description": "[fmt]\nnick: nick",
+      "completion": "%(nicks)|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "join",
+      "plugin": "irc",
+      "description": "join a channel",
+      "args": "[-noswitch] [-server <server>] [<channel1>[,<channel2>...]] [<key1>[,<key2>...]]",
+      "args_description": "[fmt]\nraw[-noswitch]: do not switch to new buffer\nserver: send to this server (internal name)\nchannel: channel name\nkey: key to join the channel (channels with a key must be the first in list)\n\nExamples:\n  /join #weechat\n  /join #protectedchan,#weechat key\n  /join -server libera #weechat\n  /join -noswitch #weechat",
+      "completion": "%(irc_channels)|-noswitch|-server|%(irc_servers)|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "kick",
+      "plugin": "irc",
+      "description": "kick a user out of a channel",
+      "args": "[<channel>] <nick> [<reason>]",
+      "args_description": "[fmt]\nchannel: channel name\nnick: nick\nreason: reason (evaluated, see /help eval; special variables ${nick} (self nick), ${target} (target nick), ${channel} and ${server} are replaced by their values)",
+      "completion": "%(nicks) %(irc_msg_kick) %-",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "kickban",
+      "plugin": "irc",
+      "description": "kick a user out of a channel and ban the host",
+      "args": "[<channel>] <nick> [<reason>]",
+      "args_description": "[fmt]\nchannel: channel name\nnick: nick\nreason: reason (evaluated, see /help eval; special variables ${nick} (self nick), ${target} (target nick), ${channel} and ${server} are replaced by their values)\n\nIt is possible to kick/ban with a mask, nick will be extracted from mask and replaced by \"*\".\n\nExample:\n  /kickban toto!*@host.com",
+      "completion": "%(irc_channel_nicks_hosts) %(irc_msg_kick) %-",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "kill",
+      "plugin": "irc",
+      "description": "close client-server connection",
+      "args": "<nick> [<reason>]",
+      "args_description": "[fmt]\nnick: nick\nreason: reason",
+      "completion": "%(nicks) %-",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "knock",
+      "plugin": "irc",
+      "description": "send a notice to an invitation-only channel, requesting an invite",
+      "args": "<channel> [<message>]",
+      "args_description": "[fmt]\nchannel: channel name\nmessage: message to send",
+      "completion": "%(irc_channels)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "links",
+      "plugin": "irc",
+      "description": "list all server names which are known by the server answering the query",
+      "args": "[[<target>] <server_mask>]",
+      "args_description": "[fmt]\ntarget: this remote server should answer the query\nserver_mask: list of servers must match this mask",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "list",
+      "plugin": "irc",
+      "description": "list channels and their topics",
+      "args": "[-server <server>] [<channel>[,<channel>...]] [<target>] || [-server <server>] [-raw *|<regex>] || -up|-down [<number>] || -left|-right [<percent>] || -go <line>|end || -join || -export <filename>",
+      "args_description": "[fmt]\nserver: send to this server (internal name)\nchannel: channel name\ntarget: server name\nraw[-raw]: display result on server buffer instead of a dedicated buffer\nregex: POSIX extended regular expression used to filter results (case-insensitive, can start by \"(?-i)\" to become case-sensitive); the special value \"*\" doesn't filter results\nraw[-up]: move the selected line up by \"number\" lines\nraw[-down]: move the selected line down by \"number\" lines\nraw[-left]: scroll the buffer by \"percent\" of width on the left\nraw[-right]: scroll the buffer by \"percent\" of width on the right\nraw[-go]: select a line by number, first line number is 0 (\"end\" to select the last line)\nraw[-join]: join the channel on the selected line\nraw[-export]: export list of channels to a file\n\nFor keys, input and mouse actions on the buffer, see key bindings in User's guide.\n\nSort keys on /list buffer:\n  raw[name]: channel name (eg: \"##test\")\n  raw[name2]: channel name without prefix (eg: \"test\")\n  raw[users]: number of users on channel\n  raw[topic]: channel topic\n\nExamples:\n  list all channels on server buffer (no dedicated buffer and can be slow on large networks):\n    /list -raw *\n  list all channels beginning with \"#weechat\" on server buffer (no dedicated buffer and can be slow on large networks):\n    /list -raw #weechat.*\n  list all channels on a dedicated buffer (can be slow on large networks):\n    /list\n  list channel #weechat on a dedicated buffer:\n    /list #weechat\n  on /list buffer:\n    channels with \"weechat\" in name:\n      n:weechat\n    channels with at least 100 users:\n      u:100\n    channels with \"freebsd\" (case-insensitive) in topic and more than 10 users:\n      c:${topic} =- freebsd && ${users} > 10\n    sort channels by users (big channels first), then name2 (name without prefix):\n      s:-users,name2",
+      "completion": "-server %(irc_servers) || -raw *|.* || -up 1|2|3|4|5 || -down 1|2|3|4|5 || -left 10|20|30|40|50|60|70|80|90|100 || -right 10|20|30|40|50|60|70|80|90|100 || -go 0|end || -join || -export %(filename)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "lusers",
+      "plugin": "irc",
+      "description": "get statistics about the size of the IRC network",
+      "args": "[<mask> [<target>]]",
+      "args_description": "[fmt]\nmask: servers matching the mask only\ntarget: server for forwarding request",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "map",
+      "plugin": "irc",
+      "description": "show a graphical map of the IRC network",
+      "args": "",
+      "args_description": "",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "me",
+      "plugin": "irc",
+      "description": "send a CTCP action to the current channel",
+      "args": "<message>",
+      "args_description": "[fmt]\nmessage: message to send",
+      "completion": "",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "mode",
+      "plugin": "irc",
+      "description": "change channel or user mode",
+      "args": "[<channel>] [+|-]o|p|s|i|t|n|m|l|b|e|v|k [<arguments>] || <nick> [+|-]i|s|w|o",
+      "args_description": "[fmt]\nchannel: channel name to modify (default is current one)\n\nChannel modes:\n  o: give/take channel operator privileges\n  p: private channel\n  s: secret channel\n  i: invite-only channel\n  t: topic settable by channel operator only\n  n: no messages to channel from clients on the outside\n  m: moderated channel\n  l: set the user limit to channel\n  b: set a ban mask to keep users out\n  e: set exception mask\n  v: give/take the ability to speak on a moderated channel\n  k: set a channel key (password)\n\nUser modes:\n  nick: nick to modify\n  i: invisible\n  s: user receives server notices\n  w: user receives wallops\n  o: operator\n\nList of modes is not comprehensive, you should read documentation about your server to see all possible modes.\n\nExamples:\n  /mode #weechat +t\n  /mode nick +i",
+      "completion": "%(irc_channel)|%(irc_server_nick)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "motd",
+      "plugin": "irc",
+      "description": "get the \"Message Of The Day\"",
+      "args": "[<target>]",
+      "args_description": "[fmt]\ntarget: server name",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "msg",
+      "plugin": "irc",
+      "description": "send message to a nick or channel",
+      "args": "[-server <server>] <target>[,<target>...] <text>",
+      "args_description": "[fmt]\nserver: send to this server (internal name)\ntarget: nick or channel (may be mask, \"*\" = current channel)\ntext: text to send",
+      "completion": "-server %(irc_servers) %(nicks)|* || %(nicks)|*",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "names",
+      "plugin": "irc",
+      "description": "list nicks on channels",
+      "args": "[-count | -x] [<channel>[,<channel>...]]",
+      "args_description": "[fmt]\nraw[-count]: display only number of users\nraw[-x]: display only users with this mode: -o for ops, -h for halfops, -v for voiced, etc. and -* for regular users\nchannel: channel name",
+      "completion": "-count|%(irc_server_prefix_modes_filter) %(irc_channels) || %(irc_channels)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "nick",
+      "plugin": "irc",
+      "description": "change current nick",
+      "args": "[-all] <nick>",
+      "args_description": "[fmt]\nraw[-all]: set new nick for all connected servers\nnick: new nick",
+      "completion": "-all %(irc_server_nick) || %(irc_server_nick)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "notice",
+      "plugin": "irc",
+      "description": "send notice message to user",
+      "args": "[-server <server>] <target> <text>",
+      "args_description": "[fmt]\nserver: send to this server (internal name)\ntarget: nick or channel name\ntext: text to send",
+      "completion": "-server %(irc_servers) %(nicks) || %(nicks)",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "notify",
+      "plugin": "irc",
+      "description": "add a notification for presence or away status of nicks on servers",
+      "args": "add|addreplace <nick> [<server> [-away]] || del <nick>|-all [<server>]",
+      "args_description": "[fmt]\nraw[add]: add a notification\nraw[addreplace]: add or replace a notification\nnick: nick\nserver: internal server name (by default current server)\nraw[-away]: notify when away message is changed (by doing whois on nick)\nraw[del]: delete a notification\nraw[-all]: delete all notifications\n\nWithout argument, this command displays notifications for current server (or all servers if command is issued on core buffer).\n\nExamples:\n  /notify add toto\n  /notify add toto libera\n  /notify add toto libera -away",
+      "completion": "add|addreplace %(irc_channel_nicks) %(irc_servers) -away %- || del -all|%(irc_notify_nicks) %(irc_servers) %-",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "op",
+      "plugin": "irc",
+      "description": "give channel operator status to nick(s)",
+      "args": "<nick>... || * -yes",
+      "args_description": "[fmt]\nnick: nick or mask (wildcard \"*\" is allowed)\n*: give channel operator status to everybody on channel",
+      "completion": "%(nicks)|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "oper",
+      "plugin": "irc",
+      "description": "get operator privileges",
+      "args": "<user> <password>",
+      "args_description": "[fmt]\nuser: user\npassword: password",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "part",
+      "plugin": "irc",
+      "description": "leave a channel",
+      "args": "[<channel>[,<channel>...]] [<message>]",
+      "args_description": "[fmt]\nchannel: channel name\nmessage: part message (displayed to other users)",
+      "completion": "%(irc_msg_part)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "ping",
+      "plugin": "irc",
+      "description": "send a ping to server",
+      "args": "<target1> [<target2>]",
+      "args_description": "[fmt]\ntarget1: server\ntarget2: forward ping to this server",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "pong",
+      "plugin": "irc",
+      "description": "answer to a ping message",
+      "args": "<daemon> [<daemon2>]",
+      "args_description": "[fmt]\ndaemon: daemon who has responded to Ping message\ndaemon2: forward message to this daemon",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "query",
+      "plugin": "irc",
+      "description": "send a private message to a nick",
+      "args": "[-noswitch] [-server <server>] <nick>[,<nick>...] [<text>]",
+      "args_description": "[fmt]\nraw[-noswitch]: do not switch to new buffer\nserver: send to this server (internal name)\nnick: nick\ntext: text to send",
+      "completion": "-noswitch|-server %(irc_servers) %(nicks) || %(nicks)",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "quiet",
+      "plugin": "irc",
+      "description": "quiet nicks or hosts",
+      "args": "[<channel>] [<nick>...]",
+      "args_description": "[fmt]\nchannel: channel name\nnick: nick or host\n\nWithout argument, this command displays the quiet list for current channel.",
+      "completion": "%(irc_channel_nicks_hosts)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "quote",
+      "plugin": "irc",
+      "description": "send raw data to server without parsing",
+      "args": "[-server <server>] <data>",
+      "args_description": "[fmt]\nserver: send to this server (internal name)\ndata: raw data to send",
+      "completion": "-server %(irc_servers)",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "reconnect",
+      "plugin": "irc",
+      "description": "reconnect to server(s)",
+      "args": "<server>... [-nojoin] [-switch] || -all [-nojoin] [-switch]",
+      "args_description": "[fmt]\nserver: internal server name\nraw[-all]: reconnect to all servers\nraw[-nojoin]: do not join any channel (even if autojoin is enabled on server)\nraw[-switch]: switch to next server address",
+      "completion": "%(irc_servers)|-all|-nojoin|-switch|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "rehash",
+      "plugin": "irc",
+      "description": "tell the server to reload its config file",
+      "args": "[<option>]",
+      "args_description": "[fmt]\noption: extra option, for some servers",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "remove",
+      "plugin": "irc",
+      "description": "force a user to leave a channel",
+      "args": "[<channel>] <nick> [<reason>]",
+      "args_description": "[fmt]\nchannel: channel name\nnick: nick\nreason: reason (special variables $nick, $channel and $server are replaced by their values)",
+      "completion": "%(irc_channel)|%(nicks) %(nicks)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "restart",
+      "plugin": "irc",
+      "description": "tell the server to restart itself",
+      "args": "[<target>]",
+      "args_description": "[fmt]\ntarget: server name",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "rules",
+      "plugin": "irc",
+      "description": "request the server rules",
+      "args": "",
+      "args_description": "",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "sajoin",
+      "plugin": "irc",
+      "description": "force a user to join channel(s)",
+      "args": "<nick> <channel>[,<channel>...]",
+      "args_description": "[fmt]\nnick: nick\nchannel: channel name",
+      "completion": "%(nicks) %(irc_server_channels)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "samode",
+      "plugin": "irc",
+      "description": "change mode on channel, without having operator status",
+      "args": "[<channel>] <mode>",
+      "args_description": "[fmt]\nchannel: channel name\nmode: mode for channel",
+      "completion": "%(irc_server_channels)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "sanick",
+      "plugin": "irc",
+      "description": "force a user to use another nick",
+      "args": "<nick> <new_nick>",
+      "args_description": "[fmt]\nnick: nick\nnew_nick: new nick",
+      "completion": "%(nicks) %(nicks)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "sapart",
+      "plugin": "irc",
+      "description": "force a user to leave channel(s)",
+      "args": "<nick> <channel>[,<channel>...]",
+      "args_description": "[fmt]\nnick: nick\nchannel: channel name",
+      "completion": "%(nicks) %(irc_server_channels)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "saquit",
+      "plugin": "irc",
+      "description": "force a user to quit server with a reason",
+      "args": "<nick> <reason>",
+      "args_description": "[fmt]\nnick: nick\nreason: reason",
+      "completion": "%(nicks)",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "server",
+      "plugin": "irc",
+      "description": "list, add or remove IRC servers",
+      "args": "list|listfull [-connected] [<name>] || add|addreplace <name> <hostname>[/<port>] [-temp] [-<option>[=<value>]] [-no<option>] || copy|rename <name> <new_name> || reorder <name>... || open <name>|-all [<name>...] || del|keep <name> || deloutq|jump || raw [<filter>]",
+      "args_description": "[fmt]\nraw[list]: list servers (without argument, this list is displayed)\nraw[listfull]: list servers with detailed info for each server\nraw[-connected]: list only connected servers\nraw[add]: add a new server\nraw[addreplace]: add or replace an existing server\nname: server name, for internal and display use; this name is used to connect to the server (/connect name) and to set server options: irc.server.name.xxx\nhostname: name or IP address of server, with optional port (default: 6697 for TLS, 6667 otherwise), many addresses can be separated by a comma\nraw[-temp]: add a temporary server (not saved)\noption: set option for server (for boolean option, value can be omitted)\nraw[nooption]: set boolean option to \"off\" (for example: -notls)\nraw[copy]: duplicate a server\nraw[rename]: rename a server\nraw[reorder]: reorder list of servers\nraw[open]: open the server buffer without connecting\nraw[keep]: keep server in config file (for temporary servers only)\nraw[del]: delete a server\nraw[deloutq]: delete messages out queue for all servers (all messages WeeChat is currently sending)\nraw[jump]: jump to server buffer\nraw[raw]: open buffer with raw IRC data\nfilter: set a new filter to see only matching messages (this filter can be used as input in raw IRC data buffer as well); allowed formats are:\n> `*`: show all messages (no filter)\n> `xxx`: show only messages containing \"xxx\"\n> `s:xxx`: show only messages for server \"xxx\"\n> `f:xxx`: show only messages with a flag: recv (message received), sent (message sent), modified (message modified by a modifier), redirected (message redirected)\n> `m:xxx`: show only IRC command \"xxx\"\n> `c:xxx`: show only messages matching the evaluated condition \"xxx\", using following variables: output of function irc_message_parse (like nick, command, channel, text, etc., see function info_get_hashtable in plugin API reference for the list of all variables), date (format: \"%FT%T.%f\", see function util_strftimeval in Plugin API reference), server, recv, sent, modified, redirected\n\nExamples:\n  /server listfull\n  /server list -connected\n  /server add libera irc.libera.chat\n  /server add libera irc.libera.chat/6667 -notls -autoconnect\n  /server add chatspike irc.chatspike.net/6667,irc.duckspike.net/6667 -notls\n  /server copy libera libera-test\n  /server rename libera-test libera2\n  /server reorder libera2 libera\n  /server del libera\n  /server deloutq\n  /server raw\n  /server raw s:libera\n  /server raw c:${recv} && ${command}==PRIVMSG && ${nick}==foo",
+      "completion": "list %(irc_servers)|-connected %(irc_servers) || listfull %(irc_servers)|-connected  %(irc_servers) || add|addreplace %(irc_servers) || copy %(irc_servers) %(irc_servers) || rename %(irc_servers) %(irc_servers) || keep %(irc_servers) || reorder %(irc_servers)|%* || open %(irc_servers)|-all %(irc_servers)|%* || del %(irc_servers) || deloutq || jump || raw %(irc_raw_filters)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "service",
+      "plugin": "irc",
+      "description": "register a new service",
+      "args": "<nick> <reserved> <distribution> <type> <reserved> <info>",
+      "args_description": "[fmt]\ndistribution: visibility of service\ntype: reserved for future usage",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "servlist",
+      "plugin": "irc",
+      "description": "list services currently connected to the network",
+      "args": "[<mask> [<type>]]",
+      "args_description": "[fmt]\nmask: list only services matching this mask\ntype: list only services of this type",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "setname",
+      "plugin": "irc",
+      "description": "set real name",
+      "args": "<realname>",
+      "args_description": "[fmt]\nrealname: new real name",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "squery",
+      "plugin": "irc",
+      "description": "deliver a message to a service",
+      "args": "<service> <text>",
+      "args_description": "[fmt]\nservice: name of service\ntext: text to send",
+      "completion": "",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "squit",
+      "plugin": "irc",
+      "description": "disconnect server links",
+      "args": "<target> <comment>",
+      "args_description": "[fmt]\ntarget: server name\ncomment: comment",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "stats",
+      "plugin": "irc",
+      "description": "query statistics about server",
+      "args": "[<query> [<target>]]",
+      "args_description": "[fmt]\nquery: c/h/i/k/l/m/o/y/u (see RFC1459)\ntarget: server name",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "summon",
+      "plugin": "irc",
+      "description": "give users who are on a host running an IRC server a message asking them to please join IRC",
+      "args": "<user> [<target> [<channel>]]",
+      "args_description": "[fmt]\nuser: username\ntarget: server name\nchannel: channel name",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "time",
+      "plugin": "irc",
+      "description": "query local time from server",
+      "args": "[<target>]",
+      "args_description": "[fmt]\ntarget: query time from specified server",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "topic",
+      "plugin": "irc",
+      "description": "get/set channel topic",
+      "args": "[<channel>] [<topic>|-delete]",
+      "args_description": "[fmt]\nchannel: channel name\ntopic: new topic\nraw[-delete]: delete channel topic",
+      "completion": "%(irc_channel_topic)|-delete",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "trace",
+      "plugin": "irc",
+      "description": "find the route to specific server",
+      "args": "[<target>]",
+      "args_description": "[fmt]\ntarget: server name",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "unban",
+      "plugin": "irc",
+      "description": "unban nicks or hosts",
+      "args": "[<channel>] <nick>|<number>|<n1>-<n2>...",
+      "args_description": "[fmt]\nchannel: channel name\nnick: nick or host\nnumber: ban number (as displayed by command /ban)\nn1: interval start number\nn2: interval end number",
+      "completion": "%(irc_modelist_masks:b)|%(irc_modelist_numbers:b)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "unquiet",
+      "plugin": "irc",
+      "description": "unquiet nicks or hosts",
+      "args": "[<channel>] <nick>|<number>|<n1>-<n2>...",
+      "args_description": "[fmt]\nchannel: channel name\nnick: nick or host\nnumber: quiet number (as displayed by command /quiet)\nn1: interval start number\nn2: interval end number",
+      "completion": "%(irc_modelist_masks:q)|%(irc_modelist_numbers:q)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "userhost",
+      "plugin": "irc",
+      "description": "return a list of information about nicks",
+      "args": "<nick>...",
+      "args_description": "[fmt]\nnick: nick",
+      "completion": "%(nicks)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "users",
+      "plugin": "irc",
+      "description": "list of users logged into the server",
+      "args": "[<target>]",
+      "args_description": "[fmt]\ntarget: server name",
+      "completion": "",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "version",
+      "plugin": "irc",
+      "description": "give the version info of nick or server (current or specified)",
+      "args": "[<target>|<nick>]",
+      "args_description": "[fmt]\ntarget: server name\nnick: nick",
+      "completion": "%(nicks)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "voice",
+      "plugin": "irc",
+      "description": "give voice to nick(s)",
+      "args": "<nick>... || * -yes",
+      "args_description": "[fmt]\nnick: nick or mask (wildcard \"*\" is allowed)\n*: give voice to everybody on channel",
+      "completion": "%(nicks)|%*",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "wallchops",
+      "plugin": "irc",
+      "description": "send a notice to channel ops",
+      "args": "[<channel>] <text>",
+      "args_description": "[fmt]\nchannel: channel name\ntext: text to send",
+      "completion": "",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "wallops",
+      "plugin": "irc",
+      "description": "send a message to all currently connected users who have set the \"w\" user mode for themselves",
+      "args": "<text>",
+      "args_description": "[fmt]\ntext: text to send",
+      "completion": "",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "who",
+      "plugin": "irc",
+      "description": "generate a query which returns a list of information",
+      "args": "[<mask> [o]]",
+      "args_description": "[fmt]\nmask: only information which match this mask\no: only operators are returned according to the mask supplied",
+      "completion": "%(irc_channels)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "whois",
+      "plugin": "irc",
+      "description": "query information about user(s)",
+      "args": "[<target>] [<nick>[,<nick>...]]",
+      "args_description": "[fmt]\ntarget: server name\nnick: nick (may be a mask)\n\nWithout argument, this command will do a whois on:\n  - your own nick if buffer is a server/channel\n  - remote nick if buffer is a private.\n\nIf option irc.network.whois_double_nick is enabled, two nicks are sent (if only one nick is given), to get idle time in answer.",
+      "completion": "%(nicks)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "whowas",
+      "plugin": "irc",
+      "description": "ask for information about a nick which no longer exists",
+      "args": "<nick>[,<nick>...] [<count> [<target>]]",
+      "args_description": "[fmt]\nnick: nick\ncount: number of replies to return (full search if negative number)\ntarget: reply should match this mask",
+      "completion": "%(nicks)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "logger",
+      "plugin": "logger",
+      "description": "logger plugin configuration",
+      "args": "list || set <level> || flush || disable",
+      "args_description": "[fmt]\nraw[list]: show logging status for opened buffers\nraw[set]: set logging level on current buffer\nlevel: level for messages to be logged (0 = logging disabled, 1 = a few messages (most important) .. 9 = all messages)\nraw[flush]: write all log files now\nraw[disable]: disable logging on current buffer (set level to 0)\n\nOptions \"logger.level.*\" and \"logger.mask.*\" can be used to set level or mask for a buffer, or buffers beginning with name.\n\nLog levels used by IRC plugin:\n  1: user message (channel and private), notice (server and channel)\n  2: nick change\n  3: server message\n  4: join/part/quit\n  9: all other messages\n\nExamples:\n  set level to 5 for current buffer:\n    /logger set 5\n  disable logging for current buffer:\n    /logger disable\n  set level to 3 for all IRC buffers:\n    /set logger.level.irc 3\n  disable logging for main WeeChat buffer:\n    /set logger.level.core.weechat 0\n  use a directory per IRC server and a file per channel inside:\n    /set logger.mask.irc \"$server/$channel.weechatlog\"",
+      "completion": "list || set 1|2|3|4|5|6|7|8|9 || flush || disable",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "python",
+      "plugin": "python",
+      "description": "list/load/unload scripts",
+      "args": "list|listfull [<name>] || load [-q] <filename> || autoload || reload|unload [-q] [<name>] || eval [-o|-oc] <code> || version",
+      "args_description": "[fmt]\nraw[list]: list loaded scripts\nraw[listfull]: list loaded scripts (verbose)\nraw[load]: load a script\nraw[autoload]: load all scripts in \"autoload\" directory\nraw[reload]: reload a script (if no name given, unload all scripts, then load all scripts in \"autoload\" directory)\nraw[unload]: unload a script (if no name given, unload all scripts)\nfilename: script (file) to load\nraw[-q]: quiet mode: do not display messages\nname: a script name (name used in call to \"register\" function)\nraw[eval]: evaluate source code and display result on current buffer\nraw[-o]: send evaluation result to the buffer without executing commands\nraw[-oc]: send evaluation result to the buffer and execute commands\ncode: source code to evaluate\nraw[version]: display the version of interpreter used\n\nWithout argument, this command lists all loaded scripts.",
+      "completion": "list %(python_script) || listfull %(python_script) || load %(filename) || autoload || reload %(python_script) || unload %(python_script) || eval || version",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "relay",
+      "plugin": "relay",
+      "description": "relay control",
+      "args": "list|listfull|listrelay || add|addreplace <name> <port>|<path> || del|start|restart|stop <name> || raw || tlscertkey",
+      "args_description": "[fmt]\nraw[list]: list relay clients (only active relays)\nraw[listfull]: list relay clients (verbose, all relays)\nraw[listrelay]: list relays (name and port)\nraw[add]: add a relay (listen on a port/path)\nraw[addreplace]: add or replace an existing relay\nraw[del]: remove a relay (clients remain connected)\nraw[start]: listen on port\nraw[restart]: close the server socket and listen again on port (clients remain connected)\nraw[stop]: close the server socket (clients remain connected)\nname: relay name (see format below)\nport: port used for relay\npath: path used for relay (for UNIX domain socket only); path is evaluated (see function string_eval_path_home in plugin API reference)\nraw[raw]: open buffer with raw Relay data\nraw[tlscertkey]: set TLS certificate/key using path in option relay.network.tls_cert_key\n\nRelay name is: [ipv4.][ipv6.][tls.]<protocol.name> or unix.[tls.]<protocol.name>:\n  - ipv4: force use of IPv4\n  - ipv6: force use of IPv6\n  - tls: enable TLS\n  - unix: use UNIX domain socket\n  - protocol.name: protocol and name to relay:\n    - protocol \"irc\": name is the server to share (optional, if not given, the server name must be sent by client in command \"PASS\", with format: \"PASS server:password\")\n    - protocol \"api\" (name is not used)\n    - protocol \"weechat\" (name is not used)\n\nThe \"irc\" protocol allows any IRC client (including WeeChat itself) to connect on the port.\nThe \"api\" protocol allows a remote interface (including WeeChat itself) to connect on the port.\nThe \"weechat\" protocol allows a remote interface (but not WeeChat itself) to connect on the port.\n\nThe list of remote interfaces is here: https://weechat.org/about/interfaces/\n\nWithout argument, this command opens buffer with list of relay clients.\n\nExamples:\n  /relay add irc.libera 8000\n  /relay add tls.irc.libera 8001\n  /relay add tls.irc 8002\n  /relay add tls.api 9000\n  /relay add weechat 10000\n  /relay add tls.weechat 10001\n  /relay add ipv4.tls.weechat 10001\n  /relay add ipv6.tls.weechat 10001\n  /relay add ipv4.ipv6.tls.weechat 10001\n  /relay add unix.weechat ${weechat_runtime_dir}/relay_socket",
+      "completion": "list %(relay_relays) || listfull %(relay_relays) || listrelay || add|addreplace %(relay_protocol_name) %(relay_free_port) || del %(relay_relays) || start %(relay_relays) || restart %(relay_relays) || stop %(relay_relays) || raw || tlscertkey",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "remote",
+      "plugin": "relay",
+      "description": "control of remote relay servers",
+      "args": "list|listfull [<name>] || add|addreplace <name> <url> [-<option>[=<value>]] || connect|reconnect|disconnect|del <name> || send <name> <json> || rename <name> <new_name> || togglecmd",
+      "args_description": "[fmt]\nraw[list]: list remote relay servers (without argument, this list is displayed)\nraw[listfull]: list remote relay servers (verbose)\nraw[add]: add a remote relay server\nraw[addreplace]: add or replace an existing remote relay server\nname: name of remote relay server, for internal and display use; this name is used to connect to the remote relay and to set remote relay options: relay.remote.name.xxx\nurl: URL of the remote relay, format is https://example.com:9000 or http://example.com:9000 (plain-text connection, not recommended)\noption: set option for remote relay\nraw[connect]: connect to a remote relay server\nraw[reconnect]: reconnect to a remote relay server\nraw[disconnect]: disconnect from a remote relay server\nraw[del]: delete a remote relay server\nraw[send]: send JSON data to a remote relay server\nraw[rename]: rename a remote relay server\nraw[togglecmd]: toggle execution of commands on a remote buffer: on the remote WeeChat or locally (default key: alt+ctrl+l)\n\nExamples:\n  /remote add example https://localhost:9000 -password=my_secret_password -totp_secret=secrettotp\n  /remote connect example\n  /remote disconnect example\n  /remote del example",
+      "completion": "list %(relay_remotes) || listfull %(relay_remotes) || add|addreplace %(relay_remotes) https://localhost:9000 -autoconnect=on|-password=${xxx}|-proxy=xxx|-tls_verify=off|-totp_secret=${xxx}|%* || connect|reconnect|disconnect|del %(relay_remotes) || send %(relay_remotes) {\"request\":\"\"} || rename %(relay_remotes) %(relay_remotes) || togglecmd",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "script",
+      "plugin": "script",
+      "description": "WeeChat script manager",
+      "args": "enable || list [-o|-ol|-i|-il] || search <text> || show <script> || load|unload|reload <script>... || autoload|noautoload|toggleautoload <script>... || install|remove|installremove|hold [-q] <script>... || upgrade || update || -up|-down [<number>] || -go <line>|end",
+      "args_description": "[fmt]\nraw[enable]: enable download of scripts (turn on option script.scripts.download_enabled)\nraw[list]: list loaded scripts (all languages)\nraw[-o]: send list of loaded scripts to buffer (string in English)\nraw[-ol]: send list of loaded scripts to buffer (translated string)\nraw[-i]: copy list of loaded scripts in command line (for sending to buffer) (string in English)\nraw[-il]: copy list of loaded scripts in command line (for sending to buffer) (translated string)\nraw[search]: search scripts by tags, language (python, perl, ...), filename extension (py, pl, ...) or text; result is displayed on scripts buffer\nraw[show]: show detailed info about a script\nraw[load]: load script(s)\nraw[unload]: unload script(s)\nraw[reload]: reload script(s)\nraw[autoload]: autoload the script\nraw[noautoload]: do not autoload the script\nraw[toggleautoload]: toggle autoload\nraw[install]: install/upgrade script(s)\nraw[remove]: remove script(s)\nraw[installremove]: install or remove script(s), depending on current state\nraw[hold]: hold/unhold script(s) (a script held will not be upgraded anymore and cannot be removed)\nraw[-q]: quiet mode: do not display messages\nraw[upgrade]: upgrade all installed scripts which are obsolete (new version available)\nraw[update]: update local scripts cache\nraw[-up]: move the selected line up by \"number\" lines\nraw[-down]: move the selected line down by \"number\" lines\nraw[-go]: select a line by number, first line number is 0 (\"end\" to select the last line)\n\nWithout argument, this command opens a buffer with list of scripts.\n\nOn script buffer, the possible status for each script are:\n  `*`: popular script\n  `i`: installed\n  `a`: autoloaded\n  `H`: held\n  `r`: running (loaded)\n  `N`: obsolete (new version available)\n\nIn output of /script list, this additional status can be displayed:\n  `?`: unknown script (cannot be downloaded/updated)\n\nIn input of script buffer, word(s) are used to filter scripts on description, tags, ...). The input \"*\" removes the filter.\n\nFor keys, input and mouse actions on the buffer, see key bindings in User's guide.\n\nExamples:\n  /script search url\n  /script install go.py urlserver.py\n  /script remove go.py\n  /script hold urlserver.py\n  /script reload urlserver\n  /script upgrade",
+      "completion": "enable || list -i|-il|-o|-ol || search %(script_tags)|%(script_languages)|%(script_extensions) || show %(script_scripts) || load %(script_files)|%* || unload %(python_script)|%(perl_script)|%(ruby_script)|%(tcl_script)|%(lua_script)|%(guile_script)|%(javascript_script)|%(php_script)|%* || reload %(python_script)|%(perl_script)|%(ruby_script)|%(tcl_script)|%(lua_script)|%(guile_script)|%(javascript_script)|%(php_script)|%* || autoload %(script_files)|%* || noautoload %(script_files)|%* || toggleautoload %(script_files)|%* || install %(script_scripts)|%* || remove %(script_scripts_installed)|%* || installremove %(script_scripts)|%* || hold %(script_scripts)|%* || update || upgrade || -up 1|2|3|4|5 || -down 1|2|3|4|5 || -go 0|end",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "spell",
+      "plugin": "spell",
+      "description": "spell plugin configuration",
+      "args": "enable|disable|toggle || listdict || setdict -|<dict>[,<dict>...] || deldict || addword [<dict>] <word>",
+      "args_description": "[fmt]\nraw[enable]: enable spell checker\nraw[disable]: disable spell checker\nraw[toggle]: toggle spell checker\nraw[listdict]: show installed dictionaries\nraw[setdict]: set dictionary for current buffer (multiple dictionaries can be separated by a comma, the special value \"-\" disables spell checking on current buffer)\nraw[deldict]: delete dictionary used on current buffer\nraw[addword]: add a word in personal dictionary\n\nInput line beginning with a \"/\" is not checked, except for some commands (see /set spell.check.commands).\n\nTo enable spell checker on all buffers, use option \"default_dict\", then enable spell checker, for example:\n  /set spell.check.default_dict \"en\"\n  /spell enable\n\nTo display a list of suggestions in a bar, use item \"spell_suggest\".\n\nDefault key to toggle spell checker is alt-s.",
+      "completion": "enable || disable || toggle || listdict || setdict %(spell_dicts) || deldict || addword",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "trigger",
+      "plugin": "trigger",
+      "description": "manage triggers, the Swiss Army knife for WeeChat",
+      "args": "list [-o|-ol|-i|-il] || listfull || listdefault || add|addoff|addreplace <name> <hook> [\"<arguments>\" [\"<conditions>\" [\"<regex>\" [\"<command>\" [\"<return_code>\" [\"<post_action>\"]]]]]] || addinput [<hook>] || input|output|recreate <name> || set <name> <option> <value> || rename|copy <name> <new_name> || enable|disable|toggle [<name>|<mask>...] || restart <name>|<mask>... || show <name> || del <name>|<mask>... || restore <name>|<mask>... || default -yes || monitor [<filter>]",
+      "args_description": "[fmt]\nraw[list]: list triggers (without argument, this list is displayed)\nraw[-o]: send list of triggers enabled to buffer (string in English)\nraw[-ol]: send list of triggers enabled to buffer (translated string)\nraw[-i]: copy list of triggers enabled in command line (for sending to buffer) (string in English)\nraw[-il]: copy list of triggers enabled in command line (for sending to buffer) (translated string)\nraw[listfull]: list triggers with detailed info for each trigger\nraw[listdefault]: list default triggers\nraw[add]: add a trigger\nraw[addoff]: add a trigger (disabled)\nraw[addreplace]: add or replace an existing trigger\nname: name of trigger\nhook: signal, hsignal, modifier, line, print, command, command_run, timer, config, focus, info, info_hashtable\narguments: arguments for the hook, depending on hook (separated by semicolons):\n> type `signal`: name(s) of signal (required)\n> type `hsignal`: name(s) of hsignal (required)\n> type `modifier`: name(s) of modifier (required)\n> type `line`: buffer type (\"formatted\", \"free\" or \"*\"), list of buffer masks, tags\n> type `print`: buffer, tags, message, strip colors\n> type `command`: command (required), description, arguments, description of arguments, completion (all arguments except command are evaluated, \"${tg_trigger_name}\" is replaced by the trigger name, see /help eval)\n> type `command_run`: command(s) (required)\n> type `timer`: interval (required), align on second, max calls\n> type `config`: name(s) of option (required)\n> type `focus`: name(s) of area (required)\n> type `info`: name(s) of info (required)\n> type `info_hashtable`: name(s) of info (required)\nconditions: evaluated conditions for the trigger\nregex: one or more regular expressions to replace strings in variables\ncommand: command to execute (many commands can be separated by \";\")\nreturn_code: return code in callback (ok (default), ok_eat, error)\npost_action: action to take after execution (none (default), disable, delete)\nraw[addinput]: set input with default arguments to create a trigger\nraw[input]: set input with the command used to create the trigger\nraw[output]: send the command to create the trigger on the buffer\nraw[recreate]: same as \"input\", with option \"addreplace\" instead of \"add\"\nraw[set]: set an option in a trigger\noption: name of option: name, hook, arguments, conditions, regex, command, return_code (for help on option, you can type: /help trigger.trigger.<name>.<option>)\nvalue: new value for the option\nraw[rename]: rename a trigger\nraw[copy]: copy a trigger\nraw[enable]: enable triggers (without arguments: enable triggers globally)\nraw[disable]: disable triggers (without arguments: disable triggers globally)\nraw[toggle]: toggle triggers (without arguments: toggle triggers globally)\nraw[restart]: restart triggers (recreate the hooks)\nraw[show]: show detailed info on a trigger (with some stats)\nraw[del]: delete triggers\nraw[restore]: restore triggers with the default values (works only for default triggers)\nmask: name where wildcard \"*\" is allowed\nraw[default]: delete all triggers and restore default ones\nraw[monitor]: open the trigger monitor buffer, with optional filter\nfilter: filter hooks/triggers to display (a hook must start with \"@\", for example \"@signal\"), many filters can be separated by commas; wildcard \"*\" is allowed in each trigger name\n\nWhen a trigger callback is called, following actions are performed, in this order:\n  1. check conditions; if false, exit\n  2. replace text using POSIX extended regular expression(s) (if defined in trigger)\n  3. execute command(s) (if defined in trigger)\n  4. exit with a return code (except for modifier, line, focus, info and info_hashtable)\n  5. perform post action\n\nExamples (you can also look at default triggers with /trigger listdefault):\n  add text attributes *bold*, _underline_ and /italic/ (only in user messages):\n    /trigger add effects modifier weechat_print \"${tg_tag_nick}\" \"==\\*([^ ]+)\\*==*${color:bold}${re:1}${color:-bold}*== ==_([^ ]+)_==_${color:underline}${re:1}${color:-underline}_== ==/([^ ]+)/==/${color:italic}${re:1}${color:-italic}/\"\n  hide nicklist bar on small terminals:\n    /trigger add resize_small signal signal_sigwinch \"${info:term_width} < 100\" \"\" \"/bar hide nicklist\"\n    /trigger add resize_big signal signal_sigwinch \"${info:term_width} >= 100\" \"\" \"/bar show nicklist\"\n  silently save config each hour:\n    /trigger add cfgsave timer 3600000;0;0 \"\" \"\" \"/mute /save\"\n  silently save WeeChat session at midnight (see /help upgrade):\n    /trigger add session_save signal day_changed \"\" \"\" \"/mute /upgrade -save\"\n  open trigger monitor and show only modifiers and triggers whose name starts with \"resize\":\n    /trigger monitor @modifier,resize*",
+      "completion": "list -i|-il|-o|-ol || listfull || listdefault || add|addoff|addreplace %(trigger_add_arguments)|%* || addinput %(trigger_hooks) || input|output|recreate %(trigger_names) || set %(trigger_names) %(trigger_options)|name %(trigger_option_value) || rename|copy %(trigger_names) %(trigger_names) || enable %(trigger_names_disabled)|%* || disable %(trigger_names_enabled)|%* || toggle|restart|del %(trigger_names)|%* || show %(trigger_names) || restore %(trigger_names_default)|%* || default || monitor %(trigger_names)|%(trigger_hooks_filter)",
+      "keep_spaces_right": 0
+    },
+    {
+      "name": "me",
+      "plugin": "xfer",
+      "description": "send a CTCP action to remote host",
+      "args": "<message>",
+      "args_description": "[fmt]\nmessage: message to send",
+      "completion": "",
+      "keep_spaces_right": 1
+    },
+    {
+      "name": "xfer",
+      "plugin": "xfer",
+      "description": "xfer control",
+      "args": "[list|listfull]",
+      "args_description": "[fmt]\nraw[list]: list xfer\nraw[listfull]: list xfer (verbose)\n\nWithout argument, this command opens buffer with xfer list.",
+      "completion": "list|listfull",
+      "keep_spaces_right": 0
+    }
+  ]
+}

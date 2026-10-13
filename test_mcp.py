@@ -9,9 +9,10 @@ class Fake:
 
     def __init__(self):
         self.calls = []
+        self.allowed = "irc.railway.#wchat"
 
     def config_get_plugin(self, name):
-        return "irc.railway.#wchat"
+        return self.allowed
 
     def infolist_get(self, kind, ptr, args):
         rows = (
@@ -120,6 +121,51 @@ class Tests(unittest.TestCase):
         self.api.lines["irc.railway.#wchat"].extend(range(250))
         self.assertEqual(len(self.api.history("irc.railway.#wchat")["lines"]), 200)
 
+    def test_recent_messages_limits_and_metadata(self):
+        buffer = "irc.railway.#wchat"
+        self.api.lines[buffer].extend({"sequence": i} for i in range(1, 251))
+        self.api.evicted[buffer] = 50
+        result = self.api.call("weechat_read_recent_messages", {"buffer": buffer})
+        self.assertEqual(
+            [x["sequence"] for x in result["lines"]], list(range(201, 251))
+        )
+        self.assertEqual(result["epoch"], self.api.epoch)
+        self.assertEqual(result["evicted_through"], 50)
+        self.assertEqual(result["retained"], 200)
+        self.assertEqual(result["available"], 200)
+        self.assertEqual(result["returned"], 50)
+        self.assertTrue(result["truncated"])
+        self.assertIn("older lines not imported", result["since"])
+        for limit in (1, 200):
+            result = self.api.call(
+                "weechat_read_recent_messages", {"buffer": buffer, "limit": limit}
+            )
+            self.assertEqual(len(result["lines"]), limit)
+            self.assertEqual(result["truncated"], limit < 200)
+        self.assertFalse(self.w.calls)
+
+    def test_recent_messages_scope_revocation_and_validation(self):
+        tool = "weechat_read_recent_messages"
+        buffer = "irc.railway.#wchat"
+        result = self.api.call(tool, {"buffer": buffer})
+        self.assertEqual(result["lines"], [])
+        self.assertEqual(result["returned"], 0)
+        self.assertFalse(result["truncated"])
+        for bad in (0, -1, 201, True, False, 1.5, "50", None):
+            with self.assertRaises(ValueError):
+                self.api.call(tool, {"buffer": buffer, "limit": bad})
+        for args in ({}, {"buffer": 42}, {"buffer": buffer, "extra": 1}):
+            with self.assertRaises(ValueError):
+                self.api.call(tool, args)
+        for name in ("irc.railway.#private", "unknown", "irc.railway.%23wchat"):
+            with self.assertRaises(ValueError):
+                self.api.call(tool, {"buffer": name})
+        self.api.lines[buffer].append({"sequence": 1, "message": "retained"})
+        self.w.allowed = ""
+        with self.assertRaises(ValueError):
+            self.api.call(tool, {"buffer": buffer})
+        self.assertFalse(self.w.calls)
+
 
 class FakeBackend:
     def __init__(self):
@@ -152,7 +198,42 @@ class FastMCPTests(unittest.IsolatedAsyncioTestCase):
     async def test_tool_discovery(self):
         names = [t.name for t in await self.client.list_tools()]
         self.assertIn("weechat_msg", names)
+        self.assertIn("weechat_read_recent_messages", names)
         self.assertNotIn("weechat_exec", names)
+
+    async def test_recent_messages_tool(self):
+        import json
+
+        buffer = "irc.railway.#wchat"
+        self.backend.api.lines[buffer].extend(
+            {"sequence": i, "message": str(i)} for i in range(1, 4)
+        )
+        result = await self.client.call_tool(
+            "weechat_read_recent_messages", {"buffer": buffer, "limit": 2}
+        )
+        self.assertFalse(result.is_error)
+        from mcp_types import TextContent
+
+        content = result.content[0]
+        assert isinstance(content, TextContent)
+        history = json.loads(content.text)
+        self.assertEqual([x["sequence"] for x in history["lines"]], [2, 3])
+        for args in (
+            {"buffer": "irc.railway.#private"},
+            {"buffer": buffer, "limit": 201},
+            {"buffer": buffer, "limit": True},
+            {"buffer": buffer, "extra": 1},
+        ):
+            result = await self.client.call_tool(
+                "weechat_read_recent_messages", args, raise_on_error=False
+            )
+            self.assertTrue(result.is_error)
+        self.backend.api.w.allowed = ""
+        result = await self.client.call_tool(
+            "weechat_read_recent_messages", {"buffer": buffer}, raise_on_error=False
+        )
+        self.assertTrue(result.is_error)
+        self.assertFalse(self.backend.api.w.calls)
 
     async def test_resource_read(self):
         import json

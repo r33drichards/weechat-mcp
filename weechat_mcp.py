@@ -5,8 +5,12 @@ import collections
 import json
 import os
 import socket
+import sys
 import uuid
 from urllib.parse import quote, unquote
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from command_manifest import build_manifest, serialize, tool_spec  # noqa: E402
 
 MAX_FRAME = 65536
 SAFE_COMMANDS = {"msg", "say", "me", "names", "who", "topic"}
@@ -38,8 +42,18 @@ class BridgeProtocol:
 
 
 class WeeChatAPI:
-    def __init__(self, w):
+    def __init__(self, w, full_control=None):
         self.w = w
+        self.full_control = (
+            os.environ.get("WEECHAT_MCP_FULL_CONTROL") == "1"
+            if full_control is None
+            else full_control
+        )
+        self.command_source = None
+        source_path = os.environ.get("WEECHAT_MCP_SOURCE_MANIFEST")
+        if self.full_control and source_path:
+            with open(source_path) as source_file:
+                self.command_source = json.load(source_file)
         self.lines = collections.defaultdict(lambda: collections.deque(maxlen=200))
         self.evicted = collections.defaultdict(int)
         self.sequence = 0
@@ -71,6 +85,82 @@ class WeeChatAPI:
             self.w.infolist_free(il)
         return commands
 
+    def command_manifest(self):
+        records = []
+        il = self.w.infolist_get("hook", "", "command")
+        try:
+            while self.w.infolist_next(il):
+                records.append(
+                    {
+                        "name": self.w.infolist_string(il, "command"),
+                        "plugin": self.w.infolist_string(il, "plugin_name") or "core",
+                        **{
+                            key: self.w.infolist_string(il, key)
+                            for key in (
+                                "description",
+                                "args",
+                                "args_description",
+                                "completion",
+                            )
+                        },
+                        "keep_spaces_right": self.w.infolist_integer(
+                            il, "keep_spaces_right"
+                        ),
+                    }
+                )
+        finally:
+            self.w.infolist_free(il)
+        return build_manifest(
+            records, self.w.info_get("version", ""), self.command_source
+        )
+
+    def command_buffers(self):
+        """Execution contexts only; never broadens existing history/resources."""
+        result = {}
+        il = self.w.infolist_get("buffer", "", "")
+        try:
+            while self.w.infolist_next(il):
+                result[self.w.infolist_string(il, "full_name")] = (
+                    self.w.infolist_pointer(il, "pointer")
+                )
+        finally:
+            self.w.infolist_free(il)
+        return result
+
+    def call_generated(self, name, args):
+        manifest = self.command_manifest()
+        item = next((c for c in manifest["commands"] if c["tool_name"] == name), None)
+        if item is None:
+            raise ValueError("Command is no longer registered")
+        value = serialize(item, args)
+        contexts = self.command_buffers()
+        b = args["buffer"]
+        if not isinstance(b, str) or b not in contexts:
+            raise ValueError("Unknown command buffer context")
+        # /command explicitly selects the plugin, including shadowed commands.
+        # Names originate from hooks, but still validate before composing a command.
+        import re
+
+        if not all(
+            re.fullmatch(r"[^\s\"'\\\x00-\x1f\x7f]+", item[k])
+            and not item[k].startswith("-")
+            for k in ("plugin", "name")
+        ):
+            raise ValueError("Registry identity cannot be safely dispatched")
+        command = "/command " + item["plugin"] + " /" + item["name"]
+        rc = self.w.command(contexts[b], command + (" " + value if value else ""))
+        if rc != self.w.WEECHAT_RC_OK:
+            raise ValueError("WeeChat rejected command")
+        return {
+            "dispatched": True,
+            "target_callback_status": "unavailable",
+            "buffer": b,
+            "command": item["name"],
+            "plugin": item["plugin"],
+            "registry_revision": item["revision"],
+            "note": "WeeChat /command dispatcher accepted input; it does not propagate the target callback return code. Not a callback, delivery or completion acknowledgement",
+        }
+
     def tools(self):
         tools = [
             {
@@ -85,8 +175,28 @@ class WeeChatAPI:
         ]
         tools.append(
             {
+                "name": "weechat_read_recent_messages",
+                "description": "Read recent printed lines from an exposed buffer, oldest first. Only the latest 200 lines since plugin load are retained; older scrollback is not imported.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "buffer": {"type": "string"},
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 200,
+                            "default": 50,
+                        },
+                    },
+                    "required": ["buffer"],
+                    "additionalProperties": False,
+                },
+            }
+        )
+        tools.append(
+            {
                 "name": "weechat_command_catalog",
-                "description": "Discover registered slash commands and which are currently exposed; execution is allowlisted",
+                "description": "Discover registered slash commands and which are currently exposed by the selected execution policy",
                 "inputSchema": {
                     "type": "object",
                     "properties": {},
@@ -94,6 +204,31 @@ class WeeChatAPI:
                 },
             }
         )
+        if self.full_control:
+            tools.extend(
+                [
+                    {
+                        "name": "weechat_command_manifest",
+                        "description": "Versioned complete runtime command inventory, typed/fallback coverage and metadata provenance",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": False,
+                        },
+                    },
+                    {
+                        "name": "weechat_command_contexts",
+                        "description": "List all command execution buffer contexts (full control only)",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": False,
+                        },
+                    },
+                ]
+            )
+            tools.extend(tool_spec(c) for c in self.command_manifest()["commands"])
+            return tools
         for name, description in sorted(self.commands().items()):
             tools.append(
                 {
@@ -118,13 +253,50 @@ class WeeChatAPI:
             raise ValueError("Tool name must be a string")
         if not isinstance(args, dict):
             raise ValueError("Arguments must be an object")
+        if self.full_control:
+            if name in ("weechat_command_manifest", "weechat_command_contexts"):
+                if args:
+                    raise ValueError("This tool takes no arguments")
+                return (
+                    self.command_manifest()
+                    if name == "weechat_command_manifest"
+                    else list(self.command_buffers())
+                )
+            if name.startswith("weechat_cmd_"):
+                return self.call_generated(name, args)
         if name == "weechat_buffers":
             return list(self.buffers())
+        if name == "weechat_read_recent_messages":
+            if set(args) - {"buffer", "limit"}:
+                raise ValueError("Unexpected history argument")
+            b = args.get("buffer")
+            limit = args.get("limit", 50)
+            if not isinstance(b, str):
+                raise ValueError("Buffer must be a string")
+            if type(limit) is not int or not 1 <= limit <= 200:
+                raise ValueError("Limit must be an integer from 1 to 200")
+            # Reuse resource resolution so current scope/revocation always applies.
+            snapshot = self.history(self.resolve(self.uri(b)))
+            lines = snapshot["lines"]
+            return {
+                **snapshot,
+                "buffer": b,
+                "lines": lines[-limit:],
+                "available": len(lines),
+                "returned": min(limit, len(lines)),
+                "truncated": len(lines) > limit,
+            }
         if name == "weechat_command_catalog":
             return [
-                {"command": k, "description": v, "exposed": k in SAFE_COMMANDS}
+                {
+                    "command": k,
+                    "description": v,
+                    "exposed": self.full_control or k in SAFE_COMMANDS,
+                }
                 for k, v in sorted(self.commands(True).items())
             ]
+        if self.full_control:
+            raise ValueError("Unknown generated command tool")
         command = name.removeprefix("weechat_")
         if command not in self.commands():
             raise ValueError("Command is not exposed")

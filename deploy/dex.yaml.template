@@ -1,0 +1,33 @@
+issuer: @@DEX_ISSUER@@
+frontend:
+  dir: /srv/dex/web
+storage:
+  type: sqlite3
+  config:
+    file: /data/dex.db
+web:
+  http: 127.0.0.1:5556
+telemetry:
+  http: 127.0.0.1:5558
+oauth2:
+  responseTypes: [code]
+  grantTypes: [authorization_code, refresh_token]
+  pkce:
+    enforce: true
+    codeChallengeMethodsSupported: [S256]
+  skipApprovalScreen: true
+enablePasswordDB: false
+staticClients:
+  - id: pomerium
+    name: WeeChat MCP
+    public: true
+    redirectURIs:
+      - @@AUTH_CALLBACK@@
+connectors:
+  - type: github
+    id: github
+    name: GitHub
+    config:
+      clientID: $GITHUB_CLIENT_ID
+      clientSecret: $GITHUB_CLIENT_SECRET
+      redirectURI: @@DEX_CALLBACK@@
