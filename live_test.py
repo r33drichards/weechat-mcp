@@ -5,11 +5,12 @@ import argparse
 import json
 import os
 import pathlib
-import select
 import socket
 import subprocess
 import tempfile
 import time
+
+from mcp.shared.subscriptions import ResourceUpdated
 
 from client import Client
 from runner import Runner
@@ -36,64 +37,6 @@ def launch(cmd, path, env=None):
     p = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
     processes.append(p)
     return p
-
-
-class MCP:
-    def __init__(self, port):
-        self.p = subprocess.Popen(
-            ["python3", repo + "/bridge.py", "--loopback-port", str(port)],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        assert self.p.stdin is not None
-        assert self.p.stdout is not None
-        self.stdin = self.p.stdin
-        self.stdout = self.p.stdout
-        processes.append(self.p)
-        self.n = 0
-        self.notifications = []
-        self.buf = b""
-        self.call(
-            "initialize",
-            {
-                "protocolVersion": "2025-11-25",
-                "capabilities": {},
-                "clientInfo": {"name": "live-test", "version": "1"},
-            },
-        )
-
-    def read(self):
-        while b"\n" not in self.buf:
-            assert select.select([self.stdout], [], [], 5)[0], "MCP timeout"
-            chunk = os.read(self.stdout.fileno(), 65536)
-            assert chunk, "MCP EOF"
-            self.buf += chunk
-        line, self.buf = self.buf.split(b"\n", 1)
-        return json.loads(line)
-
-    def call(self, method, params=None):
-        self.n += 1
-        self.stdin.write(
-            (
-                json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": self.n,
-                        "method": method,
-                        "params": params or {},
-                    }
-                )
-                + "\n"
-            ).encode()
-        )
-        self.stdin.flush()
-        while True:
-            r = self.read()
-            if r.get("id") == self.n:
-                assert "error" not in r, r
-                return r["result"]
-            self.notifications.append(r)
 
 
 try:
@@ -138,12 +81,14 @@ try:
                 break
             time.sleep(0.1)
         assert endpoint.exists(), pathlib.Path(work + "/weechat.log").read_text()
-        m = MCP(int(endpoint.read_text()))
-        print("REAL_WEECHAT_MCP_INITIALIZE_OK", flush=True)
-        assert any(t["name"] == "weechat_msg" for t in m.call("tools/list")["tools"])
+        m = Client(int(endpoint.read_text()))
+        extra_clients.append(m)
+        assert m.version == "2026-07-28", m.version
+        print("REAL_WEECHAT_MODERN_MCP_2026_07_28_OK", flush=True)
+        assert any(t["name"] == "weechat_msg" for t in m.tools()["tools"])
         resources = []
         for _ in range(100):
-            resources = m.call("resources/list")["resources"]
+            resources = m.resources()["resources"]
             if resources:
                 break
             time.sleep(0.1)
@@ -151,7 +96,7 @@ try:
             "No #wchat buffer: " + pathlib.Path(work + "/weechat.log").read_text()
         )
         uri = resources[0]["uri"]
-        m.call("resources/subscribe", {"uri": uri})
+        m.listen(uri)
         observer = socket.create_connection(("127.0.0.1", ircport))
         observer.settimeout(5)
         observer.sendall(
@@ -166,21 +111,17 @@ try:
             buf += observer.recv(65536)
         observer.sendall(b"PRIVMSG #wchat :observer-to-mcp-loopback-test\r\n")
         time.sleep(0.2)
-        data = m.call("resources/read", {"uri": uri})
+        data = m.snapshot(uri)
         assert "observer-to-mcp-loopback-test" in json.dumps(data), data
-        assert any(
-            x.get("method") == "notifications/resources/updated"
-            for x in m.notifications
-        ), m.notifications
+        assert any(isinstance(x, ResourceUpdated) for x in m.notifications), (
+            m.notifications
+        )
         print("REAL_IRC_RECEIVE_AND_MCP_SUBSCRIPTION_OK", flush=True)
-        out = m.call(
-            "tools/call",
+        out = m.tool(
+            "weechat_msg",
             {
-                "name": "weechat_msg",
-                "arguments": {
-                    "buffer": "irc.railway.#wchat",
-                    "arguments": "mcp-to-observer-loopback-test",
-                },
+                "buffer": "irc.railway.#wchat",
+                "arguments": "mcp-to-observer-loopback-test",
             },
         )
         assert not out.get("isError"), out
@@ -207,55 +148,56 @@ try:
                 break
             time.sleep(0.1)
         assert endpoint2.exists(), "Second WeeChat plugin did not start"
-        m2 = MCP(int(endpoint2.read_text()))
+        m2 = Client(int(endpoint2.read_text()))
+        extra_clients.append(m2)
         for _ in range(100):
-            resources2 = m2.call("resources/list")["resources"]
+            resources2 = m2.resources()["resources"]
             if resources2:
                 break
             time.sleep(0.1)
         assert resources2, "Second WeeChat did not join"
         uri2 = resources2[0]["uri"]
-        m2.call("resources/subscribe", {"uri": uri2})
-        sent = m.call(
-            "tools/call",
+        m2.listen(uri2)
+        sent = m.tool(
+            "weechat_msg",
             {
-                "name": "weechat_msg",
-                "arguments": {
-                    "buffer": "irc.railway.#wchat",
-                    "arguments": "agent-one-to-agent-two-test",
-                },
+                "buffer": "irc.railway.#wchat",
+                "arguments": "agent-one-to-agent-two-test",
             },
         )
         assert not sent.get("isError"), sent
         for _ in range(50):
-            received = m2.call("resources/read", {"uri": uri2})
+            received = m2.snapshot(uri2)
             if "agent-one-to-agent-two-test" in json.dumps(received):
                 break
             time.sleep(0.1)
         assert "agent-one-to-agent-two-test" in json.dumps(received)
-        sent = m2.call(
-            "tools/call",
+        sent = m2.tool(
+            "weechat_msg",
             {
-                "name": "weechat_msg",
-                "arguments": {
-                    "buffer": "irc.railway.#wchat",
-                    "arguments": "agent-two-reply-to-agent-one-test",
-                },
+                "buffer": "irc.railway.#wchat",
+                "arguments": "agent-two-reply-to-agent-one-test",
             },
         )
         assert not sent.get("isError"), sent
         for _ in range(50):
-            received = m.call("resources/read", {"uri": uri})
+            received = m.snapshot(uri)
             if "agent-two-reply-to-agent-one-test" in json.dumps(received):
                 break
             time.sleep(0.1)
         assert "agent-two-reply-to-agent-one-test" in json.dumps(received)
         assert "dotmcp2" in json.dumps(received)
-        assert any(
-            x.get("method") == "notifications/resources/updated"
-            for x in m2.notifications
-        )
+        assert any(isinstance(x, ResourceUpdated) for x in m2.notifications)
         print("TWO_DISTINCT_WEECHAT_MCP_IDENTITIES_ROUNDTRIP_OK", flush=True)
+        # Separate MCP connections to one WeeChat profile have independent watches.
+        m.unlisten(uri)
+        m.notifications.clear()
+        observer.sendall(b"PRIVMSG #wchat :after-unsubscribe-test\r\n")
+        time.sleep(0.2)
+        m.snapshot(uri)
+        assert not any(isinstance(x, ResourceUpdated) for x in m.notifications)
+        m.listen(uri)
+        print("RESOURCE_LISTEN_CANCELLATION_OK", flush=True)
         # Deterministic host wakeup experiment: no external model calls or model spend.
         ca = Client(int(endpoint.read_text()))
         cb = Client(int(endpoint2.read_text()))
@@ -317,9 +259,7 @@ try:
         assert rb.start_turn() is None
         # Replayed/duplicate update notifications reread the same snapshot, never enqueue twice.
         for _ in range(2):
-            cb.notifications.append(
-                {"method": "notifications/resources/updated", "params": {"uri": uri2}}
-            )
+            cb.notifications.append(ResourceUpdated(uri=uri2))
             rb.ingest(cb.updates(uri2))
         assert rb.counts() == {"pending": 1, "running": 1}, rb.counts()
         answer = "dotmcp: yes, the local mention-trigger wakeup works."

@@ -8,114 +8,33 @@ import socket
 import uuid
 from urllib.parse import quote, unquote
 
-VERSIONS = ("2025-11-25", "2025-06-18")
 MAX_FRAME = 65536
 SAFE_COMMANDS = {"msg", "say", "me", "names", "who", "topic"}
 
 
-class Protocol:
+class BridgeProtocol:
+    """Private local IPC, not MCP. WeeChat operations stay on its event loop."""
+
     def __init__(self, api):
         self.api = api
-        self.subscriptions = set()
-        self.initialized = False
 
     def handle(self, req):
         ident = req.get("id")
-        method = req.get("method")
-        p = req.get("params") or {}
         try:
-            if not isinstance(method, str):
-                raise ValueError("Method must be a string")
-            if not isinstance(p, dict):
-                raise ValueError("Params must be an object")
-            if req.get("jsonrpc") != "2.0":
-                raise ValueError("Expected JSON-RPC 2.0")
-            if method == "initialize":
-                self.initialized = True
-                result = {
-                    "protocolVersion": p.get("protocolVersion")
-                    if p.get("protocolVersion") in VERSIONS
-                    else VERSIONS[0],
-                    "capabilities": {"tools": {}, "resources": {"subscribe": True}},
-                    "serverInfo": {"name": "weechat-mcp", "version": "0.1.0"},
-                }
-            elif method and method.startswith("notifications/"):
-                return None
-            elif not self.initialized:
-                raise ValueError("Initialize first")
-            elif method == "ping":
-                result = {}
-            elif method == "tools/list":
-                result = {"tools": self.api.tools()}
-            elif method == "tools/call":
-                try:
-                    value = self.api.call(p["name"], p.get("arguments", {}))
-                    result = {"content": [{"type": "text", "text": json.dumps(value)}]}
-                except (ValueError, KeyError, TypeError) as e:
-                    result = {
-                        "isError": True,
-                        "content": [{"type": "text", "text": str(e)}],
-                    }
-            elif method == "resources/list":
-                result = {
-                    "resources": [
-                        {
-                            "uri": self.api.uri(b),
-                            "name": b,
-                            "mimeType": "application/json",
-                        }
-                        for b in self.api.buffers()
-                    ]
-                }
-            elif method in (
-                "resources/read",
-                "resources/subscribe",
-                "resources/unsubscribe",
-            ):
-                uri = p["uri"]
-                b = self.api.resolve(uri)
-                if method == "resources/read":
-                    result = {
-                        "contents": [
-                            {
-                                "uri": uri,
-                                "mimeType": "application/json",
-                                "text": json.dumps(self.api.history(b)),
-                            }
-                        ]
-                    }
-                else:
-                    (
-                        self.subscriptions.add
-                        if method.endswith("/subscribe")
-                        else self.subscriptions.discard
-                    )(uri)
-                    result = {}
+            operation = req["operation"]
+            if operation == "tools":
+                result = self.api.tools()
+            elif operation == "buffers":
+                result = list(self.api.buffers())
+            elif operation == "call":
+                result = self.api.call(req["name"], req.get("arguments", {}))
+            elif operation == "history":
+                result = self.api.history(self.api.resolve(req["uri"]))
             else:
-                return (
-                    {
-                        "jsonrpc": "2.0",
-                        "id": ident,
-                        "error": {"code": -32601, "message": "Method not found"},
-                    }
-                    if ident is not None
-                    else None
-                )
-            return (
-                {"jsonrpc": "2.0", "id": ident, "result": result}
-                if ident is not None
-                else None
-            )
+                raise ValueError("Unknown bridge operation")
+            return {"id": ident, "result": result}
         except (ValueError, KeyError, TypeError) as e:
-            return (
-                {
-                    "jsonrpc": "2.0",
-                    "id": ident,
-                    "error": {"code": -32602, "message": str(e)},
-                }
-                if ident is not None
-                else None
-            )
+            return {"id": ident, "error": str(e)}
 
 
 class WeeChatAPI:
@@ -287,7 +206,7 @@ def tick(data, remaining):
         while len(clients) < 16:
             sock, _ = listener.accept()
             sock.setblocking(False)
-            clients[sock] = {"in": b"", "out": b"", "protocol": Protocol(api)}
+            clients[sock] = {"in": b"", "out": b"", "protocol": BridgeProtocol(api)}
     except BlockingIOError:
         pass
     for sock, state in list(clients.items()):
@@ -313,11 +232,7 @@ def tick(data, remaining):
                         raise ValueError()
                     response = state["protocol"].handle(request)
                 except (ValueError, UnicodeError):
-                    response = {
-                        "jsonrpc": "2.0",
-                        "id": None,
-                        "error": {"code": -32700, "message": "Invalid JSON request"},
-                    }
+                    response = {"id": None, "error": "Invalid bridge request"}
                 if response:
                     send(sock, response)
                 if sock not in clients:
@@ -354,15 +269,7 @@ def printed(data, buffer, date, tags, displayed, highlight, prefix, message):
         )
         uri = api.uri(name)
         for sock, state in list(clients.items()):
-            if uri in state["protocol"].subscriptions:
-                send(
-                    sock,
-                    {
-                        "jsonrpc": "2.0",
-                        "method": "notifications/resources/updated",
-                        "params": {"uri": uri},
-                    },
-                )
+            send(sock, {"event": "updated", "uri": uri})
     return api.w.WEECHAT_RC_OK
 
 
@@ -380,7 +287,7 @@ def shutdown():
 socket_path = None
 owns_socket = False
 try:
-    import weechat  # ty: ignore[unresolved-import] -- injected by the WeeChat Python plugin
+    import weechat  # ty: ignore[unresolved-import]  # Provided by WeeChat.
 except ImportError:
     weechat = None
 if weechat and weechat.register(

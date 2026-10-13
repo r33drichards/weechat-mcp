@@ -3,7 +3,7 @@ name = "weechat-mcp"
 version = "0.1.0"
 description = "Scoped WeeChat MCP plugin and deterministic host wakeup experiment"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["fastmcp==4.1.0", "mcp==2.3.0", "jsonschema>=4.26,<5"]
 
 [dependency-groups]
 dev = ["ruff>=0.14", "ty>=0.0.1"]
