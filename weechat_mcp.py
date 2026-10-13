@@ -85,6 +85,26 @@ class WeeChatAPI:
         ]
         tools.append(
             {
+                "name": "weechat_read_recent_messages",
+                "description": "Read recent printed lines from an exposed buffer, oldest first. Only the latest 200 lines since plugin load are retained; older scrollback is not imported.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "buffer": {"type": "string"},
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 200,
+                            "default": 50,
+                        },
+                    },
+                    "required": ["buffer"],
+                    "additionalProperties": False,
+                },
+            }
+        )
+        tools.append(
+            {
                 "name": "weechat_command_catalog",
                 "description": "Discover registered slash commands and which are currently exposed; execution is allowlisted",
                 "inputSchema": {
@@ -120,6 +140,26 @@ class WeeChatAPI:
             raise ValueError("Arguments must be an object")
         if name == "weechat_buffers":
             return list(self.buffers())
+        if name == "weechat_read_recent_messages":
+            if set(args) - {"buffer", "limit"}:
+                raise ValueError("Unexpected history argument")
+            b = args.get("buffer")
+            limit = args.get("limit", 50)
+            if not isinstance(b, str):
+                raise ValueError("Buffer must be a string")
+            if type(limit) is not int or not 1 <= limit <= 200:
+                raise ValueError("Limit must be an integer from 1 to 200")
+            # Reuse resource resolution so current scope/revocation always applies.
+            snapshot = self.history(self.resolve(self.uri(b)))
+            lines = snapshot["lines"]
+            return {
+                **snapshot,
+                "buffer": b,
+                "lines": lines[-limit:],
+                "available": len(lines),
+                "returned": min(limit, len(lines)),
+                "truncated": len(lines) > limit,
+            }
         if name == "weechat_command_catalog":
             return [
                 {"command": k, "description": v, "exposed": k in SAFE_COMMANDS}

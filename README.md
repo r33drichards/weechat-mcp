@@ -160,6 +160,16 @@ registered slash commands and marks which have execution adapters. The scoped
 adapters are `msg`, `say`, `me`, `names`, `who` and `topic`, when registered by the
 installed WeeChat version (`say` is absent in WeeChat 4.6.3).
 
+`weechat_read_recent_messages` reads history for clients that expose tools but
+cannot read MCP resources. Pass an exposed `buffer` and optional integer `limit`
+(default 50, range 1–200). It returns the latest requested printed lines in
+chronological order, with `epoch`, `evicted_through`, `retained`, `since`,
+`available`, `returned`, and `truncated` metadata. It uses the same live buffer
+allowlist as resource reads and sends no IRC command. Only lines captured since
+plugin load are available; restart clears this cache, and older scrollback is
+not imported. `truncated` means the limit omitted retained lines; a nonzero
+`evicted_through` means older captured lines have already left the 200-line cache.
+
 ```json
 {"name":"weechat_msg","arguments":{"buffer":"irc.railway.#wchat","arguments":"hello"}}
 ```

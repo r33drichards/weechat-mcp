@@ -322,6 +322,9 @@ async def exercise(irc_port, http_port, token, processes):
                     print("SIMULATED_RAILWAY_PRIVATE_NO_BEARER_MCP_OK", flush=True)
                 tools = await sdk.list_tools()
                 assert any(tool.name == "weechat_msg" for tool in tools.tools)
+                assert any(
+                    tool.name == "weechat_read_recent_messages" for tool in tools.tools
+                )
                 resources = await sdk.list_resources()
                 matches = [item for item in resources.resources if item.name == BUFFER]
                 assert len(matches) == 1, resources
@@ -351,6 +354,18 @@ async def exercise(irc_port, http_port, token, processes):
                             flush=True,
                         )
                         assert runner.ingest(history) == 1
+                        recent = await sdk.call_tool(
+                            "weechat_read_recent_messages",
+                            {"buffer": BUFFER, "limit": 200},
+                        )
+                        assert not recent.is_error
+                        recent_content = recent.content[0]
+                        assert isinstance(recent_content, types.TextContent)
+                        recent_history = json.loads(recent_content.text)
+                        assert inbound in json.dumps(recent_history["lines"])
+                        assert recent_history["retained"] == 200
+                        assert recent_history["epoch"] == history["epoch"]
+                        print("HTTP_REAL_IRC_RECENT_MESSAGES_TOOL_OK", flush=True)
                         turn = runner.start_turn()
                         assert turn and turn["message"]["message"] == inbound
                         assert runner.start_turn() is None, "Only one host turn may run"
