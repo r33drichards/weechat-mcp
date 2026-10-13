@@ -2,7 +2,8 @@
 """Build/run real auth images behind a local TLS fixture. No GitHub login.
 
 Requires Linux Docker. Verifies actual Pomerium/Envoy startup, Dex discovery,
-MCP rejection/discovery, initial OIDC redirects/cookies, and auth route isolation.
+MCP rejection/discovery, initial OIDC redirects/cookies, auth route isolation,
+root-owned volume initialization, non-root processes, and restart persistence.
 Does not claim authenticated owner/other-user login or an MCP data roundtrip.
 """
 
@@ -36,6 +37,7 @@ def main():
     network = "weechat-auth-test-" + suffix
     auth_image, pomerium_image = "weechat-auth:" + suffix, "weechat-pomerium:" + suffix
     names = []
+    volumes = []
     with tempfile.TemporaryDirectory(prefix="auth-container-test-") as directory:
         fixtures = Path(directory)
         fixtures.chmod(0o755)
@@ -131,6 +133,35 @@ http {{
             )
             docker("network", "create", network, stdout=subprocess.DEVNULL)
 
+            def volume_mount(volume_name, readonly=False):
+                return f"type=volume,src={volume_name},dst=/data,volume-nocopy" + (
+                    ",readonly" if readonly else ""
+                )
+
+            service_volumes = {}
+            for label, image in (("auth", auth_image), ("pomerium", pomerium_image)):
+                volume_name = network + "-" + label + "-data"
+                docker("volume", "create", volume_name, stdout=subprocess.DEVNULL)
+                volumes.append(volume_name)
+                service_volumes[label] = volume_name
+                # Without volume-nocopy Docker would copy image ownership and hide
+                # the real Railway failure. Assert the initial mounted state.
+                docker(
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "--mount",
+                    volume_mount(volume_name),
+                    "--entrypoint",
+                    "python",
+                    image,
+                    "-c",
+                    "from pathlib import Path; p=Path('/data'); "
+                    "s=p.stat(); assert (s.st_uid,s.st_gid)==(0,0); "
+                    "assert not list(p.iterdir())",
+                )
+
             def start(label, image, extra=(), command=()):
                 name = network + "-" + label
                 names.append(name)
@@ -147,6 +178,11 @@ http {{
                     str(envfile),
                     "--mount",
                     f"type=bind,src={fixtures},dst=/fixtures,readonly",
+                    *(
+                        ("--mount", volume_mount(service_volumes[label]))
+                        if label in service_volumes
+                        else ()
+                    ),
                     *extra,
                     image,
                     *command,
@@ -208,21 +244,80 @@ http {{
                 assert backend_token.encode() not in payload
                 return status, response_headers, payload
 
-            deadline = time.monotonic() + 90
-            while True:
-                try:
-                    status, _, body = request(
-                        "https://" + AUTH + "/dex/.well-known/openid-configuration"
-                    )
-                    status_mcp, headers, _ = request("https://" + MCP + "/mcp")
+            def wait_ready():
+                deadline = time.monotonic() + 90
+                previous = None
+                while True:
+                    status = status_mcp = None
+                    challenge_present = False
+                    error = None
+                    try:
+                        status, _, body = request(
+                            "https://" + AUTH + "/dex/.well-known/openid-configuration"
+                        )
+                        status_mcp, headers, _ = request("https://" + MCP + "/mcp")
+                        challenge_present = "WWW-Authenticate" in headers
+                    except (OSError, http.client.HTTPException) as exc:
+                        error = type(exc).__name__  # Never serialize URLs/credentials.
+                    current = (status, status_mcp, challenge_present, error)
+                    if current != previous:
+                        print(
+                            f"Readiness auth={status} mcp={status_mcp} "
+                            f"www_authenticate={challenge_present} error={error}",
+                            flush=True,
+                        )
+                        previous = current
                     if status == 200 and status_mcp == 401:
-                        break
-                except OSError:
-                    pass
-                if time.monotonic() > deadline:
-                    raise AssertionError("Real container topology did not become ready")
-                time.sleep(0.5)
-            assert json.loads(body)["issuer"] == "https://" + AUTH + "/dex"
+                        return body, headers
+                    if time.monotonic() > deadline:
+                        raise AssertionError(
+                            "Real container topology did not become ready: "
+                            f"auth={status} mcp={status_mcp} "
+                            f"www_authenticate={challenge_present} error={error}"
+                        )
+                    time.sleep(0.5)
+
+            def check_processes(name):
+                docker(
+                    "exec",
+                    "--user",
+                    "10001:10001",
+                    name,
+                    "python",
+                    "-c",
+                    """
+import os
+from pathlib import Path
+seen = 0
+for path in Path('/proc').glob('[0-9]*/status'):
+    if path.parent.name == str(os.getpid()):
+        continue  # This Docker exec probe did not pass through the initializer.
+    try:
+        fields = dict(line.split(':', 1) for line in path.read_text().splitlines())
+    except FileNotFoundError:
+        continue
+    assert fields['Uid'].split() == ['10001'] * 4, 'Root/foreign process UID'
+    assert fields['Gid'].split() == ['10001'] * 4, 'Root/foreign process GID'
+    assert not fields['Groups'].split(), 'Unexpected supplementary groups'
+    seen += 1
+assert seen >= 2, 'Service processes are missing'
+p = Path('/data')
+s = p.stat()
+assert (s.st_uid, s.st_gid, s.st_mode & 0o777) == (10001, 10001, 0o700)
+""",
+                )
+
+            body, headers = wait_ready()
+            for name in (auth, pom):
+                check_processes(name)
+            print(
+                "PASS root-owned empty volume boot; all service process identities are non-root"
+            )
+            discovery = json.loads(body)
+            assert discovery["issuer"] == "https://" + AUTH + "/dex"
+            status, _, body = request(discovery["jwks_uri"])
+            assert status == 200
+            dex_keys = json.loads(body)
             match = re.search(
                 r'resource_metadata="([^"]+)"', headers["WWW-Authenticate"]
             )
@@ -275,24 +370,27 @@ http {{
                     }
                 )
             )
-            cookies = []
-            reached_dex = False
-            for _ in range(8):
-                status, response_headers, _ = request(url)
-                cookies.extend(response_headers.get_all("Set-Cookie", []))
-                assert status in (302, 303), (
-                    f"Expected initial login redirect, got {status}"
+            authorization_url = url
+
+            def start_oidc(url):
+                cookies = []
+                for _ in range(8):
+                    status, response_headers, _ = request(url)
+                    cookies.extend(response_headers.get_all("Set-Cookie", []))
+                    assert status in (302, 303), (
+                        f"Expected initial login redirect, got {status}"
+                    )
+                    next_url = urljoin(url, response_headers["Location"])
+                    parsed = urlsplit(next_url)
+                    if parsed.hostname == AUTH and parsed.path.startswith("/dex/auth"):
+                        assert cookies, "Expected authentication/CSRF cookies"
+                        return cookies
+                    url = next_url
+                raise AssertionError(
+                    "Pomerium did not redirect to the shared auth-origin Dex issuer"
                 )
-                next_url = urljoin(url, response_headers["Location"])
-                parsed = urlsplit(next_url)
-                if parsed.hostname == AUTH and parsed.path.startswith("/dex/auth"):
-                    reached_dex = True
-                    break
-                url = next_url
-            assert reached_dex, (
-                "Pomerium did not redirect to the shared auth-origin Dex issuer"
-            )
-            assert cookies, "Expected authentication/CSRF cookies"
+
+            cookies = start_oidc(authorization_url)
             for cookie in cookies:
                 lowered = cookie.lower()
                 assert (
@@ -326,6 +424,56 @@ http {{
             print(
                 "NOT TESTED: GitHub consent/login, owner/other-user policy, token exchange, upstream header replacement, MCP streaming, Railway"
             )
+            # Verify both actual databases exist on the mounts, and retain a
+            # synthetic marker across container recreation (not just process restart).
+            for name, state_path in ((auth, "dex.db"), (pom, "databroker")):
+                docker(
+                    "exec",
+                    "--user",
+                    "10001:10001",
+                    name,
+                    "python",
+                    "-c",
+                    "from pathlib import Path; p=Path('/data'); "
+                    f"assert (p/{state_path!r}).exists(); "
+                    "(p/'restart-marker').write_text('persistent fixture')",
+                )
+            docker("stop", "--time", "15", auth, pom, stdout=subprocess.DEVNULL)
+            for name in (auth, pom):
+                state = json.loads(docker("inspect", name, capture_output=True).stdout)[
+                    0
+                ]["State"]
+                assert not state["Running"] and state["ExitCode"] == 0
+                docker("rm", name, stdout=subprocess.DEVNULL)
+                names.remove(name)
+            auth = start("auth", auth_image, ("--cpus", "0.5", "--memory", "512m"))
+            pom = start("pomerium", pomerium_image, ("--cpus", "0.5", "--memory", "1g"))
+            # nginx resolves the fixture service IPs at startup; recreation may
+            # assign different IPs. Production auth routing uses a runtime resolver.
+            docker("restart", gateway, stdout=subprocess.DEVNULL)
+            wait_ready()
+            for name in (auth, pom):
+                check_processes(name)
+                docker(
+                    "exec",
+                    "--user",
+                    "10001:10001",
+                    name,
+                    "python",
+                    "-c",
+                    "from pathlib import Path; "
+                    "assert Path('/data/restart-marker').read_text() == 'persistent fixture'",
+                )
+            status, _, body = request(discovery["jwks_uri"])
+            assert status == 200 and json.loads(body) == dex_keys, (
+                "Dex signing keys did not persist"
+            )
+            start_oidc(
+                authorization_url
+            )  # The original DCR client must remain registered.
+            print(
+                "PASS container recreation: persistent markers, Dex keys and registered MCP client"
+            )
             docker(
                 "stop", "--time", "15", auth, pom, gateway, stdout=subprocess.DEVNULL
             )
@@ -335,11 +483,31 @@ http {{
                 ]["State"]
                 assert not state["Running"] and state["ExitCode"] == 0
             print("PASS actual container SIGTERM shutdown")
+            for label, image in (("auth", auth_image), ("pomerium", pomerium_image)):
+                result = subprocess.run(
+                    [
+                        "docker",
+                        "run",
+                        "--rm",
+                        "--network",
+                        "none",
+                        "--mount",
+                        volume_mount(service_volumes[label], readonly=True),
+                        image,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                )
+                assert result.returncode == 1, "Read-only storage did not fail closed"
+                assert "Volume initialization failed" in result.stderr
+            print("PASS read-only volumes fail before rendering or starting services")
         except BaseException:
             # No real secrets used. Avoid logging OAuth redirect/access tokens anyway.
             for name in names:
                 result = subprocess.run(
-                    ["docker", "logs", "--tail", "30", name],
+                    ["docker", "logs", "--tail", "100", name],
                     capture_output=True,
                     text=True,
                 )
@@ -352,6 +520,10 @@ http {{
             for name in reversed(names):
                 subprocess.run(["docker", "rm", "-f", name], capture_output=True)
             subprocess.run(["docker", "network", "rm", network], capture_output=True)
+            for volume_name in reversed(volumes):
+                subprocess.run(
+                    ["docker", "volume", "rm", volume_name], capture_output=True
+                )
 
 
 if __name__ == "__main__":

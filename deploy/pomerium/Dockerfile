@@ -4,10 +4,11 @@ FROM python:3.12-slim-bookworm
 RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --create-home pomerium \
-    && mkdir -p /data && chown 10001:10001 /data
+    && mkdir -p /data
 COPY --from=pomerium /bin/pomerium /usr/local/bin/pomerium
 WORKDIR /app
-COPY deploy/render_config.py deploy/service_entrypoint.py deploy/pomerium.yaml.template ./
-USER 10001:10001
+COPY deploy/render_config.py deploy/service_entrypoint.py deploy/volume_entrypoint.py deploy/pomerium.yaml.template ./
+# Only volume initialization runs as root; the supervisor/services run as UID 10001.
+USER 0:0
 EXPOSE 8080
-ENTRYPOINT ["python", "/app/service_entrypoint.py", "pomerium"]
+ENTRYPOINT ["python", "-I", "/app/volume_entrypoint.py", "pomerium"]

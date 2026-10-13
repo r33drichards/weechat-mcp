@@ -14,8 +14,21 @@ preparation, not a claim that resources, credentials or a working login exist.
    0.5 GB RAM. Persistent `/data` volume for Dex SQLite.
 
 The three service limits are an upper-bound resource plan, not a billing cap.
-Keep the separately approved $75/month total budget visible in Railway. Configure
-volume ownership for UID/GID 10001 before starting either auth container.
+Keep the separately approved $75/month total budget visible in Railway. Mount a
+separate persistent volume at `/data` for each auth service. Use the image's default
+entrypoint and user: a short root initializer accepts a root-owned empty volume,
+sets only `/data` to UID/GID 10001 and mode 0700, then clears supplementary groups
+and permanently drops all root UID/GID identities before rendering config or
+starting services. No manual volume ownership step is required.
+
+State paths remain `/data/dex.db` (including SQLite sidecars) and
+`/data/databroker`, so existing correctly owned state is reused on restart. Startup
+fails closed on symlinks, unsafe ownership/permissions, or unwritable storage.
+Existing state must belong to UID/GID 10001 and not be group/world-writable; regular
+state files must not be hard links. The initializer never recursively changes
+ownership or modifies unrelated volume contents. For older root-owned state,
+stop the service and have an administrator validate and repair only its state
+files from a backup before restarting. Do not mount one volume in both services.
 
 MCP clients connect to Pomerium. Pomerium owns MCP discovery, client registration,
 PKCE and client tokens. It delegates OIDC to Dex, which uses GitHub OAuth. Pomerium

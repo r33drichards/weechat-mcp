@@ -10,6 +10,7 @@
 deploy/**
 !deploy/render_config.py
 !deploy/service_entrypoint.py
+!deploy/volume_entrypoint.py
 !deploy/*.template
 !deploy/auth/
 deploy/auth/**

@@ -83,6 +83,8 @@ def supervise(commands):
 def main():
     if len(sys.argv) != 2 or sys.argv[1] not in ("auth", "pomerium"):
         raise ValueError("Expected service: auth or pomerium")
+    if 0 in (*os.getresuid(), *os.getresgid(), *os.getgroups()):
+        raise ValueError("Services must not run as root")
     service = sys.argv[1]
     os.umask(0o077)
     with tempfile.TemporaryDirectory(prefix="weechat-auth-config-") as directory:

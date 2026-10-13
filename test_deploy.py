@@ -18,6 +18,7 @@ DEPLOY = Path(__file__).resolve().parent / "deploy"
 with patch.object(sys, "path", [str(DEPLOY), *sys.path]):
     renderer = importlib.import_module("render_config")
     entrypoint = importlib.import_module("service_entrypoint")
+    volume = importlib.import_module("volume_entrypoint")
 
 POMERIUM_ENV = {
     "AUTH_ORIGIN": "https://auth.example.test",
@@ -303,6 +304,205 @@ class RendererTests(unittest.TestCase):
                 self.assertNotIn("issuer:", output)
 
 
+class VolumeEntrypointTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        # Filesystem tests use this unprivileged test user's actual ownership.
+        for name, value in (("UID", os.getuid()), ("GID", os.getgid())):
+            patched = patch.object(volume, name, value)
+            patched.start()
+            self.addCleanup(patched.stop)
+
+    def test_only_volume_directory_is_changed(self):
+        unrelated = self.root / "unrelated"
+        unrelated.mkdir(mode=0o755)
+        marker = unrelated / "keep"
+        marker.write_text("unchanged")
+        previous = (unrelated.stat(), marker.stat())
+        with patch.object(volume.os, "fchown") as chown:
+            volume.initialize_volume(self.root)
+        self.assertEqual(stat.S_IMODE(self.root.stat().st_mode), 0o700)
+        chown.assert_called_once()
+        self.assertEqual(chown.call_args.args[1:], (os.getuid(), os.getgid()))
+        self.assertEqual((unrelated.stat(), marker.stat()), previous)
+        self.assertEqual(marker.read_text(), "unchanged")
+
+    def test_root_owned_empty_volume_is_supported(self):
+        info = Mock(st_uid=0, st_gid=0, st_mode=stat.S_IFDIR | 0o755)
+        with (
+            patch.object(volume.os, "fstat", return_value=info),
+            patch.object(volume.os, "fchmod") as chmod,
+            patch.object(volume.os, "fchown") as chown,
+        ):
+            volume.initialize_volume(self.root)
+        chmod.assert_called_once()
+        self.assertEqual(chmod.call_args.args[1], 0o700)
+        chown.assert_called_once()
+
+    def test_unsafe_volume_ownership_or_permissions_are_rejected_unchanged(self):
+        for uid, gid, mode in ((12345, 0, 0o755), (0, 12345, 0o755), (0, 0, 0o777)):
+            info = Mock(st_uid=uid, st_gid=gid, st_mode=stat.S_IFDIR | mode)
+            with (
+                self.subTest(uid=uid, gid=gid, mode=mode),
+                patch.object(volume.os, "fstat", return_value=info),
+                patch.object(volume.os, "fchmod") as chmod,
+                patch.object(volume.os, "fchown") as chown,
+                self.assertRaises(ValueError),
+            ):
+                volume.initialize_volume(self.root)
+            chmod.assert_not_called()
+            chown.assert_not_called()
+
+    def test_volume_symlink_and_non_directory_are_rejected(self):
+        target = self.root / "target"
+        target.mkdir(mode=0o755)
+        alias = self.root / "alias"
+        alias.symlink_to(target, target_is_directory=True)
+        regular = self.root / "file"
+        regular.touch()
+        for path in (alias, regular):
+            with self.subTest(path=path), self.assertRaises(OSError):
+                volume.initialize_volume(path)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755)
+
+    def test_privilege_drop_clears_groups_and_real_effective_saved_ids_in_order(self):
+        calls = Mock()
+        with (
+            patch.object(volume.os, "setgroups", calls.groups),
+            patch.object(volume.os, "setresgid", calls.gid),
+            patch.object(volume.os, "setresuid", calls.uid),
+            patch.object(volume.os, "getresuid", return_value=(volume.UID,) * 3),
+            patch.object(volume.os, "getresgid", return_value=(volume.GID,) * 3),
+            patch.object(volume.os, "getgroups", return_value=[]),
+        ):
+            volume.drop_privileges()
+        self.assertEqual(
+            calls.mock_calls,
+            [
+                call.groups([]),
+                call.gid(*((volume.GID,) * 3)),
+                call.uid(*((volume.UID,) * 3)),
+            ],
+        )
+
+    def test_privilege_drop_verifies_saved_ids_and_groups(self):
+        for uids, gids, groups in (
+            ((volume.UID, volume.UID, 0), (volume.GID,) * 3, []),
+            ((volume.UID,) * 3, (volume.GID, volume.GID, 0), []),
+            ((volume.UID,) * 3, (volume.GID,) * 3, [0]),
+        ):
+            with (
+                self.subTest(uids=uids, gids=gids, groups=groups),
+                patch.object(volume.os, "setgroups"),
+                patch.object(volume.os, "setresgid"),
+                patch.object(volume.os, "setresuid"),
+                patch.object(volume.os, "getresuid", return_value=uids),
+                patch.object(volume.os, "getresgid", return_value=gids),
+                patch.object(volume.os, "getgroups", return_value=groups),
+                self.assertRaises(ValueError),
+            ):
+                volume.drop_privileges()
+
+    def test_storage_preserves_existing_state_and_unrelated_files(self):
+        (self.root / "dex.db").write_text("existing database")
+        (self.root / "unrelated").symlink_to("/does/not/exist")
+        volume.check_storage("auth", self.root)
+        self.assertEqual((self.root / "dex.db").read_text(), "existing database")
+        self.assertEqual(
+            sorted(p.name for p in self.root.iterdir()), ["dex.db", "unrelated"]
+        )
+        (self.root / "databroker").mkdir()
+        (self.root / "databroker" / "CURRENT").write_text("existing database")
+        volume.check_storage("pomerium", self.root)
+        self.assertEqual(
+            (self.root / "databroker" / "CURRENT").read_text(), "existing database"
+        )
+
+    def test_storage_symlinks_hardlinks_and_fifo_are_rejected(self):
+        target = self.root / "other"
+        target.write_text("untouched")
+        state = self.root / "dex.db"
+        for kind in ("symlink", "hardlink", "fifo", "directory"):
+            if kind == "symlink":
+                state.symlink_to(target)
+            elif kind == "hardlink":
+                os.link(target, state)
+            elif kind == "fifo":
+                os.mkfifo(state)
+            else:
+                state.mkdir()
+            with self.subTest(kind=kind), self.assertRaises((ValueError, OSError)):
+                volume.check_storage("auth", self.root)
+            state.rmdir() if kind == "directory" else state.unlink()
+        self.assertEqual(target.read_text(), "untouched")
+
+    def test_nested_pomerium_state_symlink_is_rejected(self):
+        state = self.root / "databroker"
+        state.mkdir()
+        (state / "CURRENT").symlink_to("/does/not/exist")
+        with self.assertRaises(OSError):
+            volume.check_storage("pomerium", self.root)
+
+    def test_storage_unsafe_owner_or_permissions_are_rejected(self):
+        (self.root / "dex.db").write_text("existing database")
+        (self.root / "dex.db").chmod(0o666)
+        with self.assertRaises(ValueError):
+            volume.check_storage("auth", self.root)
+        (self.root / "dex.db").chmod(0o600)
+        with patch.object(volume, "UID", 12345), self.assertRaises(ValueError):
+            volume.check_storage("auth", self.root)
+
+    def test_storage_write_failure_is_fatal_and_probe_is_removed(self):
+        with (
+            patch.object(volume.os, "write", side_effect=OSError("read-only storage")),
+            self.assertRaises(OSError),
+        ):
+            volume.check_storage("auth", self.root)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_bootstrap_order_and_fail_closed_before_exec(self):
+        for failure in (None, "initialize", "drop", "check"):
+            events = Mock()
+            if failure:
+                getattr(events, failure).side_effect = OSError("synthetic failure")
+            with (
+                self.subTest(failure=failure),
+                patch.object(sys, "argv", ["volume_entrypoint.py", "auth"]),
+                patch.object(volume.os, "geteuid", return_value=0),
+                patch.object(volume.os, "umask"),
+                patch.object(volume, "initialize_volume", events.initialize),
+                patch.object(volume, "drop_privileges", events.drop),
+                patch.object(volume, "check_storage", events.check),
+                patch.object(volume.os, "execv", events.execute),
+            ):
+                if failure:
+                    with self.assertRaises(OSError):
+                        volume.main()
+                    events.execute.assert_not_called()
+                else:
+                    volume.main()
+                    self.assertEqual(
+                        [item[0] for item in events.mock_calls],
+                        ["initialize", "drop", "check", "execute"],
+                    )
+                    self.assertEqual(events.execute.call_args.args[1][-1], "auth")
+
+    def test_docker_images_use_separate_initializer(self):
+        for service in ("auth", "pomerium"):
+            dockerfile = (DEPLOY / service / "Dockerfile").read_text()
+            self.assertIn(
+                '"-I", "/app/volume_entrypoint.py", "' + service + '"', dockerfile
+            )
+            self.assertNotIn("chown", dockerfile)
+            self.assertIn("deploy/volume_entrypoint.py", dockerfile)
+        self.assertIn(
+            "!deploy/volume_entrypoint.py",
+            (DEPLOY.parent / ".dockerignore").read_text(),
+        )
+
+
 class ResolverTests(unittest.TestCase):
     def test_only_valid_ip_nameservers_are_interpolated(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -319,6 +519,20 @@ class ResolverTests(unittest.TestCase):
 
 
 class EntrypointTests(unittest.TestCase):
+    def test_root_identity_fails_before_render_or_services(self):
+        for ids in ((0, 0, 0), (10001, 10001, 0)):
+            with (
+                self.subTest(ids=ids),
+                patch.object(sys, "argv", ["service_entrypoint.py", "auth"]),
+                patch.object(entrypoint.os, "getresuid", return_value=ids),
+                patch.object(entrypoint, "render") as render,
+                patch.object(entrypoint, "supervise") as supervise,
+                self.assertRaises(ValueError),
+            ):
+                entrypoint.main()
+            render.assert_not_called()
+            supervise.assert_not_called()
+
     def test_child_environment_removes_unneeded_secrets(self):
         env = {**SYNTHETIC_SECRETS, "PATH": "/synthetic/bin", "PORT": "8080"}
         allowed = {"GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET", "POMERIUM_CLIENT_SECRET"}
@@ -546,7 +760,7 @@ sys.exit(result)
         self.assertEqual(process.returncode, 0, stdout + stderr)
         for name in ("first", "second"):
             self.assertEqual(
-                (self.root / ("stopped." + name)).read_text(), str(signal.SIGTERM)
+                (self.root / ("stopped." + name)).read_text(), str(int(signal.SIGTERM))
             )
 
     def test_actual_required_child_exit_stops_peer_and_returns_failure(self):
@@ -564,7 +778,7 @@ sys.exit(result)
                 self.assertEqual(process.returncode, 1, stdout + stderr)
                 self.assertIn("A required service exited", stderr)
                 self.assertEqual(
-                    (self.root / "stopped.second").read_text(), str(signal.SIGTERM)
+                    (self.root / "stopped.second").read_text(), str(int(signal.SIGTERM))
                 )
 
     def test_actual_second_spawn_failure_cleans_first_child(self):
@@ -589,7 +803,9 @@ service_entrypoint.subprocess.Popen = spawn
         self.assertEqual(process.returncode, 23, stdout + stderr)
         self.assertTrue((self.root / "ready.first").exists())
         self.assertFalse((self.root / "ready.second").exists())
-        self.assertEqual((self.root / "stopped.first").read_text(), str(signal.SIGTERM))
+        self.assertEqual(
+            (self.root / "stopped.first").read_text(), str(int(signal.SIGTERM))
+        )
 
 
 if __name__ == "__main__":
