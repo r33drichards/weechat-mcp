@@ -4,6 +4,7 @@
 import asyncio
 import subprocess
 import unittest
+from pathlib import Path
 from unittest.mock import Mock
 
 from bridge import create_server, http_settings
@@ -20,6 +21,21 @@ PRIVATE_ENV = {
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_runtime_modules_are_in_docker_build_context(self):
+        root = Path(__file__).parent
+        rules = (root / ".dockerignore").read_text().splitlines()
+        dockerfile = (root / "Dockerfile").read_text()
+        for name in (
+            "bridge.py",
+            "weechat_mcp.py",
+            "command_manifest.py",
+            "container_entrypoint.py",
+        ):
+            with self.subTest(name=name):
+                self.assertIn("!" + name, rules)
+                self.assertTrue((root / name).is_file())
+                self.assertIn(name, dockerfile)
+
     def test_defaults_tls_scope(self):
         commands = configuration({"IRC_HOST": "irc.example.org"})
         self.assertIn("/server add docker irc.example.org/6697 -tls", commands)

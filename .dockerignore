@@ -3,6 +3,7 @@
 !pyproject.toml
 !uv.lock
 !bridge.py
+!command_manifest.py
 !weechat_mcp.py
 !container_entrypoint.py
 !LICENSE
