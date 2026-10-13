@@ -1,14 +1,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""FastMCP stdio server backed by private, event-loop-safe WeeChat IPC."""
+"""FastMCP stdio/HTTP server backed by private, event-loop-safe WeeChat IPC."""
 
 import asyncio
+import hashlib
+import hmac
 import json
+import os
 import sys
 from urllib.parse import quote
 
 import mcp_types as types
 from fastmcp import FastMCP
 from fastmcp.resources import Resource
+from fastmcp.server.auth import AccessToken, TokenVerifier
 from fastmcp.server.providers import Provider
 from fastmcp.tools import Tool, ToolResult
 from jsonschema import validate
@@ -141,12 +145,46 @@ class WeeChatProvider(Provider):
         )
 
 
-def create_server(backend):
+class SharedSecretVerifier(TokenVerifier):
+    """Single-owner bearer authentication; keep only a digest of the runtime secret."""
+
+    def __init__(self, secret):
+        super().__init__()
+        self.digest = hashlib.sha256(secret.encode()).digest()
+
+    async def verify_token(self, token):
+        if hmac.compare_digest(hashlib.sha256(token.encode()).digest(), self.digest):
+            return AccessToken(token=token, client_id="owner", scopes=[])
+        return None
+
+
+def http_settings(env):
+    secret = env.get("MCP_AUTH_TOKEN", "")
+    if len(secret) < 32 or not secret.isascii() or any(c.isspace() for c in secret):
+        raise ValueError(
+            "HTTP requires MCP_AUTH_TOKEN of at least 32 non-space ASCII characters"
+        )
+    port = int(env.get("PORT", "8000"))
+    if not 1 <= port <= 65535:
+        raise ValueError("PORT must be between 1 and 65535")
+    return SharedSecretVerifier(secret), {
+        "host": env.get("MCP_HOST", "127.0.0.1"),
+        "port": port,
+        "path": "/mcp",
+        "host_origin_protection": True,
+        "allowed_hosts": ["localhost:*", "127.0.0.1:*", "[::1]:*"]
+        + [x.strip() for x in env.get("MCP_ALLOWED_HOSTS", "").split(",") if x.strip()],
+        "stateless_http": False,
+    }
+
+
+def create_server(backend, auth=None):
     server = FastMCP(
         "weechat-mcp",
         version="0.1.0",
         providers=[WeeChatProvider(backend)],
         strict_input_validation=True,
+        auth=auth,
     )
 
     handler = ListenHandler(backend.events)
@@ -176,6 +214,10 @@ def create_server(backend):
 
 
 async def main():
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if transport not in ("stdio", "http"):
+        raise ValueError("MCP_TRANSPORT must be stdio or http")
+    auth, settings = http_settings(os.environ) if transport == "http" else (None, {})
     tcp = len(sys.argv) == 3 and sys.argv[1] == "--loopback-port"
     if not tcp and len(sys.argv) != 2:
         raise SystemExit(
@@ -191,9 +233,13 @@ async def main():
         )
     backend = Backend(reader, writer)
     try:
-        await create_server(backend).run_stdio_async(
-            show_banner=False, log_level="ERROR"
-        )
+        server = create_server(backend, auth=auth)
+        if transport == "http":
+            await server.run_http_async(
+                transport="http", show_banner=False, log_level="ERROR", **settings
+            )
+        else:
+            await server.run_stdio_async(show_banner=False, log_level="ERROR")
     finally:
         await backend.close()
 

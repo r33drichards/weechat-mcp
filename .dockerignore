@@ -1,0 +1,8 @@
+**
+!Dockerfile
+!pyproject.toml
+!uv.lock
+!bridge.py
+!weechat_mcp.py
+!container_entrypoint.py
+!LICENSE

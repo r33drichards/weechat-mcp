@@ -1,0 +1,44 @@
+# Render with render_config.py. Public HTTPS must terminate at the ingress.
+# This listener is PRIVATE behind that trusted TLS ingress, never public HTTP.
+address: :8080
+insecure_server: true
+health_check_addr: 0.0.0.0:28080
+authenticate_service_url: @@AUTH_ORIGIN@@
+idp_provider: oidc
+idp_provider_url: @@DEX_ISSUER@@
+idp_client_id: pomerium
+# SHARED_SECRET, COOKIE_SECRET, SIGNING_KEY, IDP_CLIENT_SECRET: environment.
+databroker_storage_type: file
+databroker_storage_connection_string: file:///data/databroker
+runtime_flags:
+  mcp_dynamic_client_registration: true
+mcp_allowed_client_id_domains:
+  - chatgpt.com
+  - claude.ai
+routes:
+  - name: weechat-mcp
+    from: @@MCP_ORIGIN@@
+    regex: '^/mcp(/.*)?$'
+    to: @@BACKEND_ORIGIN@@
+    mcp:
+      server:
+        max_request_bytes: 1048576
+    policy:
+      - allow:
+          and:
+            - email:
+                is: @@OWNER_EMAIL@@
+    preserve_host_header: true
+    pass_identity_headers: true
+    # End-user OAuth terminates at Pomerium. The bridge independently checks
+    # this different private credential, overwritten on every proxied request.
+    set_request_headers:
+      Authorization: @@BACKEND_AUTHORIZATION@@
+    timeout: 0s
+    idle_timeout: 0s
+  - name: dex
+    from: @@DEX_ORIGIN@@
+    prefix: /dex
+    to: @@DEX_INTERNAL_ORIGIN@@
+    allow_public_unauthenticated_access: true
+    preserve_host_header: true

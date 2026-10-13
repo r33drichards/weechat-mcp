@@ -1,0 +1,27 @@
+issuer: @@DEX_ISSUER@@
+storage:
+  type: sqlite3
+  config:
+    file: /data/dex.db
+web:
+  http: 0.0.0.0:5556
+telemetry:
+  http: 0.0.0.0:5558
+oauth2:
+  responseTypes: [code]
+  skipApprovalScreen: true
+enablePasswordDB: false
+staticClients:
+  - id: pomerium
+    name: WeeChat MCP
+    secretEnv: POMERIUM_CLIENT_SECRET
+    redirectURIs:
+      - @@AUTH_CALLBACK@@
+connectors:
+  - type: github
+    id: github
+    name: GitHub
+    config:
+      clientID: $GITHUB_CLIENT_ID
+      clientSecret: $GITHUB_CLIENT_SECRET
+      redirectURI: @@DEX_CALLBACK@@

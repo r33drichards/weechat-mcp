@@ -76,3 +76,25 @@ jobs:
           set -o pipefail
           timeout 120s uv run --locked python live_test.py \
             --weechat-root / --miniircd .ci/miniircd/miniircd | tee integration.log
+
+  docker:
+    name: Docker image and authenticated HTTP IRC roundtrip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.23"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Check out pinned official miniircd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrosdahl/miniircd
+          ref: 42a8f800dc77d9106fe9a753c81299e8cabf5de3
+          path: .ci/miniircd
+          persist-credentials: false
+      - run: uv sync --locked
+      - name: Build actual image and exercise HTTP MCP against localhost IRC
+        run: timeout 600s uv run --locked python docker_test.py --miniircd .ci/miniircd/miniircd

@@ -58,6 +58,98 @@ The directory is mode 0700 and socket 0600. Existing sockets are never replaced;
 after a crash, verify no process owns a stale socket before removing it.
 Never expose this endpoint to untrusted users.
 
+## Docker: WeeChat + MCP in one image
+
+The image contains actual headless WeeChat, its IRC/Python plugins, this project's
+WeeChat plugin, and the pinned FastMCP bridge. It runs as UID 10001. Each launch
+creates an isolated, private temporary profile and starts both processes. The
+supervisor shuts down both on SIGTERM, bridge exit, or WeeChat failure. Logs go to
+stderr; stdout is reserved for MCP. Profile/history are ephemeral. No model runs
+inside the image.
+
+```sh
+docker build -t weechat-mcp:local .
+docker run --rm -i \
+  -e IRC_HOST=irc.example.org -e IRC_NICK=myagent \
+  -e IRC_CHANNELS='#wchat' weechat-mcp:local
+```
+
+Use `docker run --rm -i` as your MCP host's command/arguments, with the environment
+above. Do not add `-t`: terminal allocation corrupts stdio framing. No port mapping
+is needed for stdio. Closing host stdin stops the bridge and WeeChat.
+
+Runtime IRC settings:
+
+- `IRC_HOST`: required DNS hostname or IPv4 address (not a URL)
+- `IRC_PORT`: default `6697`
+- `IRC_TLS`: `true` by default; certificate verification stays enabled
+- `IRC_NICK`: default `weechat-mcp`
+- `IRC_CHANNELS`: comma-separated channel names, default `#wchat`
+
+The fixed server alias is `docker`; exposed buffers are `irc.docker.#wchat`, etc.
+Only configured channels are exposed, never all IRC buffers or direct messages.
+For a local plaintext IRC test set both `IRC_TLS=false` and `IRC_PORT=6667` (or
+its actual port). Container localhost means the container itself: use an IRC
+service name on a private Docker network, or the appropriate host gateway.
+This minimal bootstrap currently supports unauthenticated IRC servers; SASL and
+server-password configuration are not implemented. Never put credentials in an
+image, Docker build arguments, hostname, or channel names.
+
+### Streamable HTTP
+
+Set `MCP_TRANSPORT=http` for FastMCP's native Streamable HTTP endpoint at `/mcp`.
+Stdio remains the default. Protocol **2026-07-28** and stateful subscription streams
+are unchanged; this is not legacy SSE transport. `PORT` defaults to `8000`, and
+`MCP_HOST` defaults to `127.0.0.1`. For Docker port forwarding set `MCP_HOST=0.0.0.0`.
+HTTP startup fails closed without `MCP_AUTH_TOKEN` (at least 32 non-space ASCII
+characters). Supply a high-entropy runtime secret through your secret manager;
+clients send `Authorization: Bearer <token>`. This is single-owner backend
+protection, not an OAuth login service. Everyone with this secret shares one IRC
+identity and the same allowlisted channel history.
+
+With `MCP_AUTH_TOKEN` already injected into the shell environment:
+
+```sh
+docker run --rm --init \
+  -p 127.0.0.1:8000:8000 \
+  -e MCP_TRANSPORT=http -e MCP_HOST=0.0.0.0 -e MCP_AUTH_TOKEN \
+  -e IRC_HOST=irc.example.org -e IRC_NICK=myagent \
+  -e IRC_CHANNELS='#wchat' weechat-mcp:local
+```
+
+Connect to `http://127.0.0.1:8000/mcp` with the authorization header. HTTP has
+explicit Host/Origin protection. For a trusted reverse proxy set
+`MCP_ALLOWED_HOSTS` to the exact comma-separated hostnames it forwards (including
+ports where applicable); localhost hosts are allowed by default. Do not use `*`.
+No cross-origin browser access is enabled. Use TLS at the public proxy, keep the
+backend private, and never publish the local plaintext HTTP endpoint directly.
+`PORT` supports platforms such as Railway; adding this setting does not deploy or
+provision anything. Use one replica per IRC identity: state and subscriptions are
+process-local, and replicas with the same nickname will collide.
+
+For the Pomerium → Dex → GitHub login pattern, see [deployment templates](deploy/README.md).
+The proxy injects the backend secret; external MCP clients do not receive it.
+
+### Container verification
+
+Unit checks cover runtime input validation, authentication and cleanup. The
+Docker-capable integration uses a fresh image, an ephemeral localhost miniircd,
+and a separate IRC observer to prove authenticated HTTP MCP send/receive and
+subscription delivery. Linux host networking is used only for that isolated test.
+See the CI Docker job and `docker_test.py`; `--host` mode explicitly tests the
+entrypoint on the host and does not validate an image build or container runtime.
+In a sandbox that prohibits Unix sockets, host tests explicitly use
+`WEECHAT_MCP_LOOPBACK_PORT=0`: private namespace loopback IPC, not public MCP.
+Never enable this test override in an untrusted/shared network namespace.
+
+```sh
+# Builds and runs the real image (Linux Docker required):
+uv run python docker_test.py --miniircd /path/to/miniircd
+# Host fallback only; explicitly does not test Docker or Unix socket IPC:
+uv run python docker_test.py --host --loopback-ipc \
+  --weechat-root /tmp/weechat-runtime/root --miniircd /tmp/weechat-miniircd/miniircd
+```
+
 ## Tools and resources
 
 `weechat_buffers` lists exposed buffers. `weechat_command_catalog` discovers
