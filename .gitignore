@@ -8,3 +8,4 @@ __pycache__/
 *.log
 *.sock
 loopback-port
+.ruff_cache/

@@ -195,3 +195,36 @@ Sébastien Helleu and contributors. This repository contains the experimental
 Python integration, not WeeChat itself. WeeChat and miniircd are separate runtime
 dependencies with their own copyright notices and licenses. The GPL text is
 preserved from the source checkout.
+
+## Development and continuous integration
+
+Use [uv](https://docs.astral.sh/uv/) to reproduce the locked development tools:
+
+```sh
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked ty check --error-on-warning
+uv run --locked python -m unittest discover -s . -p 'test_*.py' -v
+```
+
+Run `uv run ruff format .` to format edits. Ruff checks Python errors and import
+ordering; Astral's ty checks every first-party Python file, including tests.
+The only suppressed import is `weechat`, which the embedded Python plugin injects
+at runtime and cannot be installed into the development virtual environment.
+Runtime code still has no third-party Python dependencies; the uv group is for
+development only.
+
+GitHub Actions runs these checks for pull requests and pushes to main. Unit,
+transport, and durable-wakeup tests run on Python 3.10, 3.12, and 3.14. A separate
+Ubuntu 24.04 job installs real WeeChat and its Python/IRC plugins, then runs
+`live_test.py` against a commit-pinned official miniircd listening on localhost.
+This job verifies two WeeChat identities, actual IRC send/receive, MCP resource
+notifications, reconnect catch-up, duplicate suppression, busy queues, and turn
+caps. It invokes no models and needs no secrets or external IRC account.
+
+For a system-installed Ubuntu/Debian runtime, use `--weechat-root /` with the
+live-test command above. It expects x86-64 plugin paths. The integration job has
+a two-minute harness timeout and a ten-minute job timeout; failures fail CI
+rather than silently skipping integration. WeeChat packages come from the runner's
+configured Ubuntu repositories, so their patch version may change.
