@@ -263,3 +263,91 @@ GPL-3.0-or-later; see [LICENSE](LICENSE). Developed in the
 upstream [WeeChat](https://github.com/weechat/weechat), maintained by Sébastien
 Helleu and contributors. WeeChat and miniircd are separate runtime dependencies
 with their own notices and licenses.
+
+## Generated full-command mapping (local opt-in)
+
+The default deployment policy remains the original six scoped adapters. The new
+mapping is deliberately separate from permission to expose or execute full
+WeeChat control. **Do not enable this on a public service without a separate
+access-policy review.** Full control includes shell/process commands, config,
+script loading, server management, and commands which execute other commands.
+Neither schema validation nor buffer selection is a sandbox for those effects.
+
+For an isolated profile, launch WeeChat with `WEECHAT_MCP_FULL_CONTROL=1`. The
+bridge then discovers one `weechat_cmd_<plugin>_<command>_<identity-hash>` tool for
+every current command-hook registration, with no command allowlist ceiling.
+`weechat_command_manifest` returns the versioned inventory and coverage counts;
+`weechat_command_contexts` lists exact execution buffers, including core and
+plugin buffers. Existing history tools, resources and their buffer allowlist
+are unchanged. No new streams, tasks, listeners or response collectors are added.
+
+Runtime metadata is authoritative: command name, plugin, description, args,
+args_description, completion, keep_spaces_right and WeeChat version. Plugin
+load/unload is reflected on each lookup and call. Tool identities distinguish
+shadowed names; execution uses WeeChat's `/command <plugin> /<name>` dispatcher.
+Each call requires the current `registry_revision`; help/version changes reject
+stale calls until tools are rediscovered. Completion is retained as evidence,
+not treated as an enum: completions can be dynamic, partial or advisory.
+
+The dependency-free `command_manifest.py` compiles JSON Schema and serialization
+plans from syntax metadata. These feed the existing Pydantic-backed FastMCP
+`Tool` implementation and JSON Schema validation. There is no separate manually
+maintained set of command-specific functions. Each command exposes:
+
+- `buffer`: exact execution context, such as `core.weechat`
+- `registry_revision`: the constant in the current tool schema
+- `syntax`: `v0`, `v1`, etc. for parsed help alternatives, or `raw`
+- `params`: named string placeholders and literal/enum tokens for that variant;
+  raw mode instead accepts `{ "arguments": "verbatim WeeChat arguments" }`
+
+Parsing is intentionally conservative: independent trailing optional arguments,
+angle-bracket placeholders, literal words and explicit literal alternatives.
+Placeholders remain strings; names like `port` do not prove numeric types. Empty
+help, repetition, nested options, compound host/port expressions and ambiguous
+syntax remain raw. Mixed commands expose the understood alternatives as well as
+raw mode. Raw mode is always available for valid but undocumented forms.
+This is exhaustive **command coverage**, not a claim of exhaustive strong typing.
+
+Typed tokens reject whitespace, quotes and backslashes instead of pretending
+that shell quoting matches every WeeChat callback. Raw mode preserves quoting,
+semicolons and right-hand spaces verbatim (the actual callback still controls
+trimming through keep_spaces_right). All modes reject CR/LF, other ASCII control
+characters, and payloads over 16 KiB. Commands such as `/eval`, `/exec`, aliases,
+and `/command` retain their deliberate interpreter semantics in full-control
+mode. A successful result means `/command` dispatcher acceptance only. WeeChat
+discards the target callback return code in this explicit-plugin wrapper, so the
+result reports `dispatched: true` and `target_callback_status: "unavailable"`; it
+cannot prove callback success, IRC delivery or asynchronous completion.
+
+### Source evidence and reproducible verification
+
+Extract C registrations and callback evidence without executing the source:
+
+```sh
+uv run python tools/extract_command_source.py /path/to/weechat --output /tmp/weechat-source.json
+```
+
+Optionally set `WEECHAT_MCP_SOURCE_MANIFEST=/tmp/weechat-source.json` when launching
+WeeChat. Source metadata is attached to matching runtime registrations, with
+unresolved/drift status rather than silently replacing current runtime syntax.
+This works across macro/translation wrappers; unresolved expressions and dynamic
+registration sites remain explicit evidence. Source revision and callback checks
+are audit data, not a claim that arbitrary C semantics have been proven.
+
+```sh
+uv run python -m unittest discover -s . -p 'test_*.py'
+uv run ruff check .
+uv run ruff format --check .
+uv run ty check --error-on-warning
+uv run python tools/check_command_acceptance.py \
+  --weechat-root /path/to/extracted/debian/packages \
+  --report /tmp/weechat-command-coverage.json
+```
+
+The acceptance script creates a temporary profile, loads packaged plugins, never
+configures/connects a server, validates every generated schema, and exercises only
+read-only help and server-list fixtures through IPC and MCP stdio. It terminates
+its isolated WeeChat process afterward. Tool inventory is checked against every
+registration in that instance; dynamic scripts and installation-specific plugins
+will naturally change the total. This does not test execution of destructive
+commands, every callback's semantics, other WeeChat versions, or public access.
