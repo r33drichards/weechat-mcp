@@ -1,143 +1,145 @@
-# Pomerium + Dex GitHub authentication
+# Two generated Railway domains, three services
 
-These are **deployment templates, not a running deployment**. No OAuth app,
-Railway service, public domain, credentials, or ingress has been provisioned.
+This layout uses only generated `*.up.railway.app` domains. It is local deployment
+preparation, not a claim that resources, credentials or a working login exist.
 
-## Architecture and trust
+## Traffic and trust boundaries
 
-MCP client → public HTTPS ingress → Pomerium → private WeeChat bridge.
-Pomerium delegates interactive login to Dex, which uses GitHub OAuth. Pomerium
-owns MCP OAuth discovery, client registration, PKCE and client tokens. Do not
-also enable FastMCP GitHubProvider or Pomerium `upstream_oauth2`: those are other
-flows with different callback URLs.
+1. Private **bridge**: existing root `Dockerfile`, one replica, no public domain
+   or TCP proxy. Limit: 1 CPU / 1 GB RAM.
+2. Public **Pomerium**: `deploy/pomerium/Dockerfile`, one replica, generated MCP
+   origin, port 8080. Limit: 0.5 CPU / 1 GB RAM. Persistent `/data` volume.
+3. Public **auth**: `deploy/auth/Dockerfile`, Dex plus a small nginx router in one
+   container, one replica, second generated origin, port 8080. Limit: 0.5 CPU /
+   0.5 GB RAM. Persistent `/data` volume for Dex SQLite.
 
-The route permits only `OWNER_EMAIL`, the exact email returned by Dex for the
-owner's GitHub account. Verify that claim before rollout. Dex normally returns
-the public GitHub email, or the primary email when no public email exists.
-Do not copy computer-use's `authenticated_user: true`: that application checks
-session ownership separately; this bridge controls one user's WeeChat session.
+The three service limits are an upper-bound resource plan, not a billing cap.
+Keep the separately approved $75/month total budget visible in Railway. Configure
+volume ownership for UID/GID 10001 before starting either auth container.
 
-Pomerium replaces the upstream Authorization header with the private
-`MCP_AUTH_TOKEN`, which the bridge already validates. Clients receive Pomerium
-OAuth tokens, never this backend token. This is service authentication, not
-per-user JWT verification. Do not use unverified identity headers in backend
-access decisions. Keep the bridge reachable only from Pomerium: no public
-Railway domain, TCP proxy, or Docker published port. Possession of the backend
-token bypasses Pomerium policy, so isolate it and rotate it as a credential.
+MCP clients connect to Pomerium. Pomerium owns MCP discovery, client registration,
+PKCE and client tokens. It delegates OIDC to Dex, which uses GitHub OAuth. Pomerium
+replaces upstream Authorization with the separate private bridge bearer token.
+The bridge validates that token and accepts only its configured public MCP Host.
+Do not also enable FastMCP GitHubProvider or Pomerium `upstream_oauth2`.
 
-For a future identity-aware backend, validate `X-Pomerium-Jwt-Assertion` using a
-fixed configured JWKS URL (`https://<MCP_HOST>/.well-known/pomerium/jwks.json`),
-allowed signature algorithms, expiration, and exact configured audience and
-issuer. Never derive trust from caller-controlled Host or a token's key URL.
-The inspected computer-use verifier checks signature, expiration and audience;
-it does not explicitly check issuer, so it should not be copied unchanged.
+Auth ingress maps `/dex` and `/dex/*` unchanged to loopback Dex. A pinned, exact
+allowlist of Pomerium authentication paths goes to private Pomerium. Everything
+else is denied, including MCP, MCP discovery, proxy callbacks, admin and metrics.
+The authenticate origin is not a Pomerium route: its only route is the distinct
+MCP origin. There is no Dex-through-Pomerium loop.
 
-## Inputs required before rendering
+Railway terminates HTTPS. The auth router validates the incoming Host and fixes
+upstream Host and forwarded scheme/host to the configured external auth origin.
+It clears caller-supplied reproxy/identity headers. Keep Pomerium's cookie domain
+unset so unrelated generated domains get host-only Secure cookies. Dex shares the
+authentication cookie security boundary because it shares that hostname.
 
-Set these in the trusted configuration-rendering environment, not in source:
+## Runtime inputs
 
-- `MCP_ORIGIN`: `https://<MCP_HOST>`
-- `AUTH_ORIGIN`: `https://<AUTH_HOST>`
-- `DEX_ORIGIN`: `https://<DEX_HOST>`
-- `BACKEND_ORIGIN`: private bridge origin, e.g. `http://<BRIDGE_PRIVATE_HOST>:8000`
-- `DEX_INTERNAL_ORIGIN`: private Dex origin, e.g. `http://<DEX_PRIVATE_HOST>:5556`
-- `OWNER_EMAIL`: exact approved owner identity
-- `MCP_AUTH_TOKEN`: a cryptographically random URL-safe value of at least 32
-  characters, identical to the bridge's environment variable
+Pomerium service:
 
-Run `python deploy/render_config.py`. It writes mode-0600 files under ignored
-`deploy/generated/`; those files contain the backend credential. Mount or deliver
-them privately to their containers. Do not commit them, print them in build logs,
-bake them into a public image, or run the renderer with production secrets in CI.
-The templates deliberately have no real hosts or credentials. `@@...@@` fields
-are replaced by the renderer with JSON-quoted YAML scalar values. Dex's `$...`
-connector references remain for Dex's environment substitution.
+- `MCP_ORIGIN=https://<MCP-generated-host>`
+- `AUTH_ORIGIN=https://<auth-generated-host>`; must differ from MCP origin
+- `BACKEND_ORIGIN=http://<bridge>.railway.internal:8000`
+- `OWNER_EMAIL`: exact owner email returned by Dex; verify the live claim
+- `MCP_AUTH_TOKEN`: at least 32 cryptographically random URL-safe characters,
+  identical to the bridge token
+- `SHARED_SECRET`, `COOKIE_SECRET`, `SIGNING_KEY`: Pomerium's documented key formats
+- `IDP_CLIENT_SECRET`: same value as auth's `POMERIUM_CLIENT_SECRET`
 
-## Runtime services
+Auth service:
 
-The inspected reference pins `pomerium/pomerium:v0.33.3` and
-`ghcr.io/dexidp/dex:v2.45.1`; these are reproducible reference versions, not a
-claim that they are the latest security release. Validate upgrades before use.
+- `AUTH_ORIGIN`: same auth generated origin as above
+- `POMERIUM_INTERNAL_ORIGIN=http://<pomerium>.railway.internal:8080`
+- `PORT=8080`
+- `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`: dedicated GitHub OAuth app
+- `POMERIUM_CLIENT_SECRET`: same as Pomerium's `IDP_CLIENT_SECRET`
 
-1. Pomerium: start with `--config /etc/pomerium/config.yaml`, mounting the rendered
-   Pomerium file there. It listens on 8080 behind an HTTPS-terminating ingress.
-   Supply `SHARED_SECRET`, `COOKIE_SECRET`, `SIGNING_KEY`, `IDP_CLIENT_SECRET`
-   through the runtime secret store. Generate keys in Pomerium's documented
-   formats. Persistent writable volume: `/data`; run one replica with file
-   databroker storage. Health endpoint: private port 28080 (`/readyz`).
-2. Dex: run `dex serve /etc/dex/config.yaml` with the rendered Dex file mounted.
-   Supply `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `POMERIUM_CLIENT_SECRET`.
-   The latter must equal Pomerium's `IDP_CLIENT_SECRET`. Use a writable persistent
-   `/data` volume for SQLite, one replica, and private port 5556. Health and
-   metrics port 5558 stays private. No Kubernetes storage is needed here.
-3. WeeChat bridge: existing container, one process and replica, matching
-   `MCP_AUTH_TOKEN`, `MCP_TRANSPORT=http`, `MCP_HOST=0.0.0.0`, `PORT=8000`,
-   and `MCP_ALLOWED_HOSTS=<MCP_HOST>` (the exact preserved public Host). Supply
-   the documented `IRC_*` runtime settings. Its temporary WeeChat profile and
-   history are ephemeral; restarting loses buffered history. Keep HTTP private.
-   Do not run multiple workers against the single stateful relay. MCP transport
-   stateless mode does not make the WeeChat runtime stateless.
+Bridge service:
 
-The ingress must route all three public HTTPS origins to the Pomerium listener,
-preserving the public Host and scheme. Pomerium routes the Dex host onward to
-Dex. `insecure_server: true` is ONLY for the private HTTP hop behind that ingress;
-never expose plain HTTP to the internet. Prefer TLS on internal hops where the
-platform supports it. Restrict access to private health/admin ports.
+- `MCP_TRANSPORT=http`, `PORT=8000`, `MCP_AUTH_TOKEN`
+- `MCP_ALLOWED_HOSTS=<MCP-generated-host>`
+- `MCP_HOST=::` for Railway private IPv6; verify resolution and bind reachability
+  from Pomerium before activation. Older Railway networks may be IPv6-only.
+- The documented `IRC_*` settings. Use an isolated nickname/profile and only
+  allowlisted channels. One process/replica; profile and chat history are ephemeral.
 
-## Railway/domain and OAuth checklist
+Allocate both generated domains before registering the dedicated GitHub app:
 
-A Railway-generated hostname can be filled in after it is allocated. This
-reference topology requires **three distinct public origins** mapped to the
-Pomerium ingress, not merely a hostname on the raw bridge. Verify Railway domain
-mapping, private networking, volume permissions, and ingress streaming behavior
-before deployment. A one-host path layout would need a separate validated design.
+- MCP endpoint: `https://<MCP-generated-host>/mcp`
+- Dex issuer: `https://<auth-generated-host>/dex`
+- GitHub OAuth app callback: `https://<auth-generated-host>/dex/callback`
+- Dex's Pomerium client callback: `https://<auth-generated-host>/oauth2/callback`
 
-- MCP client URL: `https://<MCP_HOST>/mcp`
-- GitHub OAuth app callback: `https://<DEX_HOST>/dex/callback`
-- Dex issuer: `https://<DEX_HOST>/dex`
-- Dex static Pomerium client callback: `https://<AUTH_HOST>/oauth2/callback`
+The client's final OAuth callback is managed by Pomerium and is different from
+both service callbacks. `chatgpt.com` and `claude.ai` are allowed client-metadata
+domains, not user access policies. Dynamic registration grants no chat access.
 
-Register the GitHub app only after the Dex origin is fixed. Use a new,
-appropriately scoped OAuth app; do not reuse another project's secret or change
-its callback blindly. The browser's final MCP-client callback is managed by
-Pomerium's MCP OAuth flow and is not the GitHub app callback above. The template
-allows known client-metadata domains `chatgpt.com` and `claude.ai`; this restricts
-metadata-document origins, not the user allowlist. Dynamic registration does
-not itself grant access to WeeChat.
+## Secret handling and lifecycle
 
-## Streaming and acceptance tests
+Each image renders only its required runtime files into a private temporary
+0700 directory, with atomically replaced 0600 files. No production secrets belong
+in source, image layers, build arguments or CI. The image build context explicitly
+excludes generated files. Manual preparation, if needed:
 
-Preserve `/mcp` unchanged, Authorization, MCP session/protocol headers, and
-Accept/Content-Type. Permit HTTP POST and GET and any SDK session DELETE method;
-do not reduce the endpoint to POST-only. Avoid SSE response buffering and
-caching; the Pomerium route disables total/idle upstream timeouts. The outer
-platform ingress can still impose limits; verify those with the target client.
+```sh
+python deploy/render_config.py --service pomerium
+python deploy/render_config.py --service auth
+```
 
-Before exposing real chat data, verify:
+`--service all` renders both using both sets of inputs. Generated files are ignored.
+The auth supervisor starts real Dex and nginx, stops both if either exits, handles
+SIGTERM, escalates stuck children, and reaps them. Dex binds 5556/5558 only on
+loopback; Pomerium health binds 28080 only on loopback. Only 8080 is exposed in the
+auth images. Do not add public port mappings for internal/admin services.
 
-1. Direct backend request without or with a wrong token returns 401.
-2. Unauthenticated public `/mcp` produces OAuth discovery/401, not tool results.
-3. An authenticated but unapproved GitHub identity is denied.
-4. The approved owner completes discovery → PKCE login → token → initialize →
-   tools/list. Do not print access or refresh tokens.
-5. A client-provided backend/identity header cannot override the proxy's header.
-6. Streaming survives expected idle periods; session headers survive both hops.
-7. Restarting Pomerium/Dex preserves necessary OAuth state via their volumes.
-8. The bridge has no publicly reachable bypass; health checks disclose no data.
+The router preserves query/body, Cookie/Set-Cookie/Location, standard methods and
+streaming headers; it disables response/request buffering and caching. Its DNS
+resolver is derived from runtime `/etc/resolv.conf`, supports IPv6 and refreshes
+private upstream addresses. Pomerium's MCP route has no total or idle timeout.
+Railway and client stream limits still require live validation.
 
-No end-to-end OAuth, container, or Railway validation is claimed by these files.
+nginx request/access and error logs are suppressed: upstream errors otherwise log
+OAuth codes in URLs even with access logs disabled. Syntax checks and supervisor
+failure notices remain visible. Do not enable verbose/request logging with real
+credentials. Inspect configuration locally with synthetic values instead.
 
-## Inspected sources
+## Validation status and commands
 
-- [computer-use Pomerium config](https://github.com/r33drichards/computer-use/blob/main/deploy/gke/pomerium-config.yaml)
-- [computer-use Dex config](https://github.com/r33drichards/computer-use/blob/main/deploy/gke/dex-config.yaml)
-- [computer-use verifier](https://github.com/r33drichards/computer-use/blob/main/backend/internal/auth/auth.go)
-- [computer-use network isolation](https://github.com/r33drichards/computer-use/blob/main/deploy/base/networkpolicy.yaml)
-- [Pomerium headers](https://www.pomerium.com/docs/reference/routes/headers)
+See [VALIDATION.md](VALIDATION.md) for exact evidence and remaining gates.
+
+```sh
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked ty check --error-on-warning
+uv run --locked python -m unittest discover -s . -v
+# Linux Docker; builds and runs actual auth images behind a local TLS fixture:
+python3 deploy/container_auth_test.py
+# Host-only real nginx/Dex plus an explicitly mocked Pomerium upstream:
+python3 deploy/auth_router_test.py --nginx /path/to/nginx \
+  --dex /path/to/dex --dex-web /path/to/dex/web
+```
+
+The Docker test is required before activating the source images. It does not
+replace live owner and other-user OAuth tests. Before exposing real chat data:
+
+1. Verify private backend missing/wrong token rejection and no public bypass.
+2. Verify public unauthenticated MCP returns 401/discovery, with no tool data.
+3. Complete owner GitHub login, inspect exact email/subject, exchange PKCE token,
+   initialize MCP and list tools. Verify an unapproved account is denied.
+4. Verify client identity/backend headers cannot override Pomerium's injected token.
+5. Exercise actual subscriptions, idle/reconnect, methods and session headers
+   through Railway and the target client.
+6. Restart both auth services; verify durable OAuth state and volume ownership.
+7. Verify all public auth/MCP domains reject access to metrics/admin/private data.
+
+## Sources
+
+- [Pomerium authentication origin separation](https://www.pomerium.com/docs/capabilities/authentication)
+- [Pomerium v0.33.3 authenticate routes](https://github.com/pomerium/pomerium/blob/v0.33.3/authenticate/handlers.go)
 - [Pomerium MCP reference](https://www.pomerium.com/docs/capabilities/mcp/reference)
-- [Pomerium identity validation](https://www.pomerium.com/docs/capabilities/getting-users-identity)
-- [Pomerium timeouts](https://www.pomerium.com/docs/internals/connection)
-- [Pomerium internal HTTP mode](https://www.pomerium.com/docs/reference/insecure-server)
-- [Dex GitHub connector](https://dexidp.io/docs/connectors/github/)
-- [Dex getting started](https://dexidp.io/docs/getting-started/)
-- [FastMCP HTTP deployment](https://gofastmcp.com/deployment/http)
+- [Pomerium headers](https://www.pomerium.com/docs/reference/routes/headers)
+- [Dex GitHub connector and callback](https://dexidp.io/docs/connectors/github/)
+- [nginx proxy behavior](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)
+- [Railway networking and domain behavior](https://docs.railway.com/networking/domains/working-with-domains)

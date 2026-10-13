@@ -1,12 +1,14 @@
 issuer: @@DEX_ISSUER@@
+frontend:
+  dir: /srv/dex/web
 storage:
   type: sqlite3
   config:
     file: /data/dex.db
 web:
-  http: 0.0.0.0:5556
+  http: 127.0.0.1:5556
 telemetry:
-  http: 0.0.0.0:5558
+  http: 127.0.0.1:5558
 oauth2:
   responseTypes: [code]
   skipApprovalScreen: true

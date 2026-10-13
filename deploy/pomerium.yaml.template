@@ -2,7 +2,12 @@
 # This listener is PRIVATE behind that trusted TLS ingress, never public HTTP.
 address: :8080
 insecure_server: true
-health_check_addr: 0.0.0.0:28080
+health_check_addr: 127.0.0.1:28080
+# Omit URL/header fields that can carry OAuth codes or credentials.
+access_log_fields: [method, response-code, duration, size]
+authorize_log_fields: [method]
+proxy_log_level: warn
+cookie_same_site: lax
 authenticate_service_url: @@AUTH_ORIGIN@@
 idp_provider: oidc
 idp_provider_url: @@DEX_ISSUER@@
@@ -36,9 +41,3 @@ routes:
       Authorization: @@BACKEND_AUTHORIZATION@@
     timeout: 0s
     idle_timeout: 0s
-  - name: dex
-    from: @@DEX_ORIGIN@@
-    prefix: /dex
-    to: @@DEX_INTERNAL_ORIGIN@@
-    allow_public_unauthenticated_access: true
-    preserve_host_header: true
