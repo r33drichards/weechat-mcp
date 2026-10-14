@@ -141,9 +141,12 @@ def run():
     if transport not in ("stdio", "http"):
         raise ValueError("MCP_TRANSPORT must be stdio or http")
     if transport == "http":
-        from bridge import http_settings
+        from bridge import event_settings, http_settings
 
-        http_settings(os.environ)  # Fail before connecting IRC if HTTP is unsafe.
+        auth, _ = http_settings(
+            os.environ
+        )  # Fail before connecting IRC if HTTP is unsafe.
+        event_settings(os.environ, auth, transport)
     os.umask(0o077)
     persistent = home(os.environ)
     if persistent is not None:

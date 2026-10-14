@@ -8,7 +8,9 @@ stay on WeeChat's event loop.
 ## Architecture
 
 - `weechat_mcp.py`: dependency-free WeeChat plugin. Exposes allowlisted buffers,
-  safe command adapters and a 200-line history ring over private local IPC.
+  safe command adapters and native buffer data over private local IPC.
+- `native_buffer.py`: read-only official hdata traversal. WeeChat owns the lines;
+  the adapter holds only cursor/lifecycle metadata, never a second content cache.
 - `bridge.py`: FastMCP 4.1.0 server. Dynamic providers discover available commands
   and buffers; the MCP SDK handles transport, validation, lifecycle and dispatch.
 - `client.py`: small host facade over the official MCP SDK client, explicitly using
@@ -176,15 +178,64 @@ registered slash commands and marks which have execution adapters. The scoped
 adapters are `msg`, `say`, `me`, `names`, `who` and `topic`, when registered by the
 installed WeeChat version (`say` is absent in WeeChat 4.6.3).
 
-`weechat_read_recent_messages` reads history for clients that expose tools but
-cannot read MCP resources. Pass an exposed `buffer` and optional integer `limit`
-(default 50, range 1–200). It returns the latest requested printed lines in
-chronological order, with `epoch`, `evicted_through`, `retained`, `since`,
-`available`, `returned`, and `truncated` metadata. It uses the same live buffer
-allowlist as resource reads and sends no IRC command. Only lines captured since
-plugin load are available; restart clears this cache, and older scrollback is
-not imported. `truncated` means the limit omitted retained lines; a nonzero
-`evicted_through` means older captured lines have already left the 200-line cache.
+`weechat_buffers` with no arguments lists the current read-allowlisted buffers.
+Pass `buffer` to read that buffer's native metadata and printed line data, plus
+optional `limit` (default 100; 1–500) and opaque `cursor`. This extends the existing
+buffer interface; the old `weechat_read_recent_messages` tool has been removed,
+with no compatibility alias or print-captured history ring.
+
+```json
+{"name":"weechat_buffers","arguments":{"buffer":"irc.railway.#wchat","limit":100}}
+```
+
+The data comes directly from WeeChat's official `hdata_get`, `hdata_pointer`,
+`hdata_*` typed getters, and `buffer_get_*` bindings. It can include lines printed
+before the MCP plugin was loaded. Only the selected buffer's `own_lines` are
+traversed; merged windows do not broaden access to other buffers. Every request,
+including pagination, checks the current read allowlist. Full-control command
+contexts do not grant additional buffer-read access. No arbitrary hdata pointers,
+paths, configuration or credentials are exposed.
+
+Native buffer data semantics:
+
+- Each page selects the newest remaining lines and returns them in native
+  insertion order, oldest first. Backdated IRC replay timestamps do not reorder
+  them. `next_cursor` reads the preceding page; new arrivals do not shift it.
+- `lines` includes status, notices, own output and filter-hidden lines. There is
+  no additional message filter. `displayed` and `highlight` are native flags;
+  `tags` preserves the native tags. `id`, `date`, optional timestamp microseconds
+  and print timestamps come from native line data. `prefix` and `message` have
+  WeeChat color codes removed. A printed line is not necessarily an IRC message.
+- `available` is the current native line count, not a historical total.
+  `returned`, `has_more`, and `next_cursor` describe the page. `epoch` identifies
+  this adapter instance/buffer lifetime; it is not a durable archive identity.
+  `data_epoch` separately identifies a native buffer lifetime using a non-secret
+  process nonce and native buffer ID where supported, so consumers do not replay
+  retained lines after plugin reload. Older versions without stable native IDs
+  cannot prove reload continuity and must fail closed on a lifetime change.
+  `oldest_available_id`, `last_assigned_id`, and `omitted_through_id` describe
+  actual native IDs. IDs are per-buffer and can be sparse on newer WeeChat.
+- Pages contain at most 500 lines and 512 KiB of serialized line data, with a
+  768 KiB complete-response ceiling. Text is never silently shortened: an
+  oversized individual line or metadata produces an explicit error. Cursor
+  seeking walks native pointers on WeeChat's event loop; it creates no index.
+- Cursors are buffer-bound, opaque and tamper-checked. They expire on adapter
+  reload/process restart, buffer close/recreation, or when their anchor line is
+  cleared/pruned. An expired cursor errors explicitly; start a fresh read.
+- WeeChat's own buffer limits, clears, closes and process lifetime determine
+  retention. Plugin reload keeps existing native lines; normal process restart
+  does not preserve them through this adapter. There is no logger-file import,
+  IRC-server-history fetch, screenshot reading, or extra persistence layer.
+- Formatted buffers require native line IDs (WeeChat 3.8+); free-content buffers
+  are rejected explicitly. Actual field types are discovered at runtime so both
+  integer and newer longlong native IDs are read correctly.
+
+A command result confirms only local dispatch. To inspect subsequent output,
+read an exposed buffer, then read again after native resource-change events or
+when a delayed server reply is expected. Output can be interleaved, routed to a
+server/core buffer, or arrive later; the adapter does not invent command/output
+correlation or claim command completion. Unexposed destination buffers remain
+unreadable until separately allowed.
 
 ```json
 {"name":"weechat_msg","arguments":{"buffer":"irc.railway.#wchat","arguments":"hello"}}
@@ -196,9 +247,9 @@ secret-bearing commands are not exposed. A successful result means local command
 acceptance, not delivery confirmation. Add typed scoped adapters for new commands
 rather than a generic command escape hatch.
 
-`resources/list` discovers allowed buffers. `resources/read` returns their most
-recent 200 printed lines since plugin load, including plugin epoch, monotonic
-sequence and eviction watermark. The SDK's `subscriptions/listen` acknowledges
+`resources/list` discovers allowed buffers. `resources/read` returns the same
+native buffer data shape, with at most 500 newest lines. Use `weechat_buffers`
+with the returned cursor for older pages. The SDK's `subscriptions/listen` acknowledges
 requested resource URIs before delivering correlated resource-change events.
 Clients reread the resource after an event. Closing the listen context cancels
 that stream; reconnecting requires a fresh listen and catch-up read.
@@ -218,9 +269,9 @@ The live test uses two distinct WeeChat profiles and deterministic host callback
 3. B replies and A wakes. Duplicate resource events do not enqueue old messages.
 4. B's remaining message stays queued because its turn limit is exhausted.
 
-SQLite cursor advancement and enqueueing are atomic. Message identity is plugin
-epoch plus sequence. Own messages, non-IRC lines and nickname substrings are
-ignored. History gaps fail closed. Intake continues while a turn runs. An uncertain
+SQLite cursor advancement and enqueueing are atomic. Message identity is buffer
+epoch plus native line ID (stored internally as ID + 1). Own messages, non-IRC lines and nickname substrings are
+ignored. Omitted rows and native-retention uncertainty fail closed. Intake continues while a turn runs. An uncertain
 running turn stays blocked after a crash for reconciliation rather than resending.
 The SQLite file must be private to each agent/buffer. History in WeeChat is bounded
 and in-memory, so reconnect catch-up cannot recover evicted or pre-restart lines.
@@ -243,6 +294,7 @@ git diff --check
 The real integration runs official Debian WeeChat 4.6.3 and miniircd on localhost:
 
 ```sh
+uv run python native_buffer_live_test.py --weechat-root /tmp/weechat-runtime/root
 uv run python live_test.py --weechat-root /tmp/weechat-runtime/root --miniircd /tmp/weechat-miniircd/miniircd
 ```
 
@@ -251,7 +303,11 @@ The root contains official Debian `weechat-headless`, `weechat-core`,
 compatible shared libraries installed on the host. CI installs WeeChat packages
 from Ubuntu and checks out a pinned commit of official miniircd.
 
-The test creates temporary profiles and an ephemeral local IRC server, verifies
+The offline native-buffer test prints 650 lines before loading the MCP plugin,
+then verifies real IPC reads, pagination/order, filter metadata, plugin reload,
+clear, WeeChat retention limits, and process restart without an adapter archive.
+
+The IRC test creates temporary profiles and an ephemeral local IRC server, verifies
 modern MCP resource events, cancellation, send/receive, two separate identities and
 the bounded host experiment, then stops all processes. It never joins an external
 IRC server or deploys a public listener.
@@ -263,6 +319,9 @@ never use it in an untrusted network namespace, forward it, or expose private
 accounts. The default Unix socket uses filesystem access controls.
 
 ## Sources
+
+- [Official WeeChat hdata API](https://weechat.org/files/doc/stable/weechat_plugin_api.en.html#_hdata)
+- [Official WeeChat buffer API](https://weechat.org/files/doc/stable/weechat_plugin_api.en.html#_buffers)
 
 - [FastMCP resources](https://gofastmcp.com/servers/resources)
 - [FastMCP providers](https://gofastmcp.com/servers/providers)
@@ -294,7 +353,7 @@ bridge then discovers one `weechat_cmd_<plugin>_<command>_<identity-hash>` tool 
 every current command-hook registration, with no command allowlist ceiling.
 `weechat_command_manifest` returns the versioned inventory and coverage counts;
 `weechat_command_contexts` lists exact execution buffers, including core and
-plugin buffers. Existing history tools, resources and their buffer allowlist
+plugin buffers. Existing buffer data, resources and their read allowlist
 are unchanged. No new streams, tasks, listeners or response collectors are added.
 
 Runtime metadata is authoritative: command name, plugin, description, args,
@@ -373,3 +432,7 @@ its isolated WeeChat process afterward. Tool inventory is checked against every
 registration in that instance; dynamic scripts and installation-specific plugins
 will naturally change the total. This does not test execution of destructive
 commands, every callback's semantics, other WeeChat versions, or public access.
+
+## Optional MCP Events
+
+[MCP Events](MCP_EVENTS.md) adds explicit, per-chat webhook subscriptions for incoming messages or nick mentions in a chosen exposed IRC channel. It is disabled unless a private persistent `MCP_EVENTS_DB` path is configured. Startup, joining channels and ordinary tool calls never subscribe a chat. The host supplies its callback/signing secret only after the user explicitly asks to monitor a channel; unsubscribe stops that chat's grant. See the guide for authentication, replay limits, configuration and rollout.

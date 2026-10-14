@@ -322,7 +322,8 @@ async def exercise(irc_port, http_port, token, processes):
                     print("SIMULATED_RAILWAY_PRIVATE_NO_BEARER_MCP_OK", flush=True)
                 tools = await sdk.list_tools()
                 assert any(tool.name == "weechat_msg" for tool in tools.tools)
-                assert any(
+                assert any(tool.name == "weechat_buffers" for tool in tools.tools)
+                assert not any(
                     tool.name == "weechat_read_recent_messages" for tool in tools.tools
                 )
                 resources = await sdk.list_resources()
@@ -355,7 +356,7 @@ async def exercise(irc_port, http_port, token, processes):
                         )
                         assert runner.ingest(history) == 1
                         recent = await sdk.call_tool(
-                            "weechat_read_recent_messages",
+                            "weechat_buffers",
                             {"buffer": BUFFER, "limit": 200},
                         )
                         assert not recent.is_error
@@ -363,9 +364,11 @@ async def exercise(irc_port, http_port, token, processes):
                         assert isinstance(recent_content, types.TextContent)
                         recent_history = json.loads(recent_content.text)
                         assert inbound in json.dumps(recent_history["lines"])
-                        assert recent_history["retained"] == 200
+                        assert recent_history["source"] == "weechat_hdata"
+                        assert recent_history["returned"] <= 200
+                        assert recent_history["buffer"]["full_name"] == BUFFER
                         assert recent_history["epoch"] == history["epoch"]
-                        print("HTTP_REAL_IRC_RECENT_MESSAGES_TOOL_OK", flush=True)
+                        print("HTTP_REAL_IRC_NATIVE_BUFFER_TOOL_OK", flush=True)
                         turn = runner.start_turn()
                         assert turn and turn["message"]["message"] == inbound
                         assert runner.start_turn() is None, "Only one host turn may run"

@@ -8,7 +8,7 @@ import json
 import os
 import re
 import sys
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import mcp_types as types
 from fastmcp import FastMCP
@@ -34,6 +34,7 @@ class Backend:
         self.sequence = 0
         self.events = InMemorySubscriptionBus()
         self.on_disconnect = lambda: None
+        self.on_buffer_updated = lambda uri: None
         self.task = asyncio.create_task(self.receive())
 
     async def receive(self):
@@ -42,10 +43,15 @@ class Backend:
                 message = json.loads(line)
                 if message.get("event") == "updated":
                     await self.events.publish(ResourceUpdated(uri=message["uri"]))
+                    self.on_buffer_updated(message["uri"])
                 else:
                     future = self.pending.pop(message["id"], None)
                     if future is not None and not future.done():
-                        if "error" in message:
+                        if message.get("error_code") == "channel_unavailable":
+                            future.set_exception(
+                                ConnectionError("Channel temporarily unavailable")
+                            )
+                        elif "error" in message:
                             future.set_exception(ValueError(message["error"]))
                         else:
                             future.set_result(message["result"])
@@ -96,7 +102,7 @@ class BufferResource(Resource):
     _backend: Backend = PrivateAttr()
 
     async def read(self):
-        return json.dumps(await self._backend.request("history", uri=str(self.uri)))
+        return json.dumps(await self._backend.request("buffer_data", uri=str(self.uri)))
 
 
 class WeeChatProvider(Provider):
@@ -212,7 +218,7 @@ def http_settings(env):
     }
 
 
-def create_server(backend, auth=None):
+def create_server(backend, auth=None, event_manager=None, event_principal=None):
     server = FastMCP(
         "weechat-mcp",
         version="0.1.0",
@@ -228,7 +234,7 @@ def create_server(backend, auth=None):
         # Validate scope before the SDK acknowledges the stream. SDK handles
         # correlation, filtering, buffering, acknowledgement and cancellation.
         for uri in params.notifications.resource_subscriptions or ():
-            await backend.request("history", uri=uri)
+            await backend.request("buffer_data", uri=uri)
         # This provider emits resource updates only, not list-change events.
         honored = params.model_copy(
             update={
@@ -244,7 +250,69 @@ def create_server(backend, auth=None):
     server._mcp_server.add_request_handler(
         "subscriptions/listen", types.SubscriptionsListenRequestParams, listen
     )
+    if event_manager is not None:
+        from event_protocol import install_event_protocol
+
+        if event_principal is None:
+            raise ValueError("Events require an authenticated principal provider")
+        install_event_protocol(server, event_manager, event_principal)
+        backend.on_buffer_updated = lambda uri: event_manager.notify(
+            unquote(uri.removeprefix("weechat://buffer/"))
+        )
     return server
+
+
+def event_settings(env, auth, transport):
+    """Disabled unless explicitly configured. Configuration creates no subscription."""
+    path = env.get("MCP_EVENTS_DB")
+    if not path:
+        return None
+    if transport != "http":
+        raise ValueError("MCP Events requires the authenticated HTTP endpoint")
+    if isinstance(auth, SharedSecretVerifier):
+        from fastmcp.server.dependencies import get_access_token
+
+        owner = "bearer:" + auth.digest.hex()
+
+        def principal():
+            token = get_access_token()
+            if token is None or not hmac.compare_digest(
+                hashlib.sha256(token.token.encode()).digest(), auth.digest
+            ):
+                raise ValueError("Authentication required")
+            return owner
+    else:
+        owner = env.get("MCP_EVENTS_OWNER", "")
+        if not re.fullmatch(r"[A-Za-z0-9._:@-]{1,128}", owner):
+            raise ValueError(
+                "Railway-private Events requires a stable single-owner MCP_EVENTS_OWNER"
+            )
+        # Only reachable behind the guarded, single-owner private authentication proxy.
+        owner = "railway-private:" + owner
+
+        def principal():
+            return owner
+
+    return path, owner, principal
+
+
+async def run_with_event_workers(server_run, event_manager):
+    if event_manager is None:
+        return await server_run
+    task = asyncio.create_task(server_run)
+    try:
+        done, _ = await asyncio.wait(
+            [task, event_manager.task, event_manager.intake_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if task in done:
+            return await task
+        # Do not expose a background exception's text or locals; fail closed so
+        # a supervisor can restart instead of serving an inert event endpoint.
+        raise RuntimeError("MCP Events worker stopped; restart required")
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def main():
@@ -252,6 +320,7 @@ async def main():
     if transport not in ("stdio", "http"):
         raise ValueError("MCP_TRANSPORT must be stdio or http")
     auth, settings = http_settings(os.environ) if transport == "http" else (None, {})
+    events = event_settings(os.environ, auth, transport)
     tcp = len(sys.argv) == 3 and sys.argv[1] == "--loopback-port"
     if not tcp and len(sys.argv) != 2:
         raise SystemExit(
@@ -266,15 +335,31 @@ async def main():
             sys.argv[1], limit=1024 * 1024
         )
     backend = Backend(reader, writer)
+    event_manager = None
     try:
-        server = create_server(backend, auth=auth)
+        principal = None
+        if events is not None:
+            from mcp_events import EventManager
+
+            path, owner, principal = events
+            event_manager = EventManager(path, backend, lambda value: value == owner)
+        server = create_server(
+            backend, auth=auth, event_manager=event_manager, event_principal=principal
+        )
+        if event_manager is not None:
+            event_manager.start()
         if transport == "http":
-            await server.run_http_async(
-                transport="http", show_banner=False, log_level="ERROR", **settings
+            await run_with_event_workers(
+                server.run_http_async(
+                    transport="http", show_banner=False, log_level="ERROR", **settings
+                ),
+                event_manager,
             )
         else:
             await server.run_stdio_async(show_banner=False, log_level="ERROR")
     finally:
+        if event_manager is not None:
+            await event_manager.close()
         await backend.close()
 
 

@@ -8,9 +8,11 @@ from runner import HistoryGap, Runner
 def snapshot(*lines, epoch="first", evicted=0):
     return {
         "epoch": epoch,
-        "evicted_through": evicted,
+        "omitted_through_id": evicted - 1 if evicted else None,
+        "oldest_available_id": min((seq - 1 for seq, _, _ in lines), default=None),
         "lines": [
-            {"sequence": seq, "nick": nick, "message": msg} for seq, nick, msg in lines
+            {"id": seq - 1, "tags": ["nick_" + nick, "irc_privmsg"], "message": msg}
+            for seq, nick, msg in lines
         ],
     }
 
@@ -73,9 +75,20 @@ class RunnerTests(unittest.TestCase):
 
     def test_epoch_reset(self):
         self.runner.ingest(snapshot((1, "other", "agentA: first")))
-        self.assertEqual(
-            self.runner.ingest(snapshot((1, "other", "agentA: new"), epoch="second")), 1
-        )
+        with self.assertRaisesRegex(HistoryGap, "lifetime changed"):
+            self.runner.ingest(snapshot((1, "other", "agentA: new"), epoch="second"))
+
+    def test_public_pagination_epoch_change_does_not_requeue_completed_native_line(
+        self,
+    ):
+        first = snapshot((1, "other", "agentA: existing"), epoch="public-before")
+        first["data_epoch"] = "stable-native-buffer"
+        self.assertEqual(self.runner.ingest(first), 1)
+        turn = self.runner.start_turn()
+        self.runner.finish_turn(turn)
+        reloaded = dict(first, epoch="public-after")
+        self.assertEqual(self.runner.ingest(reloaded), 0)
+        self.assertEqual(self.runner.counts(), {"done": 1})
 
     def test_gap_fails_closed(self):
         with self.assertRaises(HistoryGap):

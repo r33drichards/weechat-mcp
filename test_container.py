@@ -30,6 +30,7 @@ class ConfigurationTests(unittest.TestCase):
         for name in (
             "bridge.py",
             "weechat_mcp.py",
+            "native_buffer.py",
             "command_manifest.py",
             "container_entrypoint.py",
         ):

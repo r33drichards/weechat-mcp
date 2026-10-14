@@ -71,6 +71,8 @@ jobs:
           path: .ci/miniircd
           persist-credentials: false
       - run: uv sync --locked
+      - name: Verify native buffer data and lifecycle
+        run: timeout 60s uv run --locked python native_buffer_live_test.py --weechat-root /
       - name: Verify actual IRC delivery, subscriptions, and durable wakeup
         run: |
           set -o pipefail

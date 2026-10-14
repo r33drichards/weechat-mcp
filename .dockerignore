@@ -3,8 +3,12 @@
 !pyproject.toml
 !uv.lock
 !bridge.py
+!mcp_events.py
+!event_protocol.py
+!event_webhooks.py
 !command_manifest.py
 !weechat_mcp.py
+!native_buffer.py
 !container_entrypoint.py
 !LICENSE
 !deploy/
