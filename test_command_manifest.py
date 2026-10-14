@@ -4,11 +4,11 @@ import json
 import unittest
 from pathlib import Path
 
-from jsonschema import validate
+from jsonschema import ValidationError, validate
 
 from command_manifest import build_manifest, compile_variant, serialize, tool_spec
-from test_mcp import Fake
-from weechat_mcp import WeeChatAPI
+from test_mcp import Fake, FakeBackend
+from weechat_mcp import BridgeProtocol, WeeChatAPI
 
 
 def record(name="test", plugin="core", args="list|show [<name>]"):
@@ -74,6 +74,34 @@ class CompilerTests(unittest.TestCase):
     def test_no_guessed_types(self):
         schema, _ = compile_variant("<port> <count>")
         self.assertEqual(schema["properties"]["port"]["type"], "string")
+
+    def test_each_variant_is_a_complete_connector_input_schema(self):
+        item = build_manifest([record(args="list|show [<name>] || <name>...")])[
+            "commands"
+        ][0]
+        schema = tool_spec(item)["inputSchema"]
+        for branch in schema["oneOf"]:
+            with self.subTest(syntax=branch["properties"]["syntax"]["const"]):
+                self.assertEqual(branch["type"], "object")
+                self.assertEqual(set(branch["properties"]), set(schema["properties"]))
+                self.assertEqual(branch["required"], schema["required"])
+                self.assertFalse(branch["additionalProperties"])
+                for key in ("buffer", "registry_revision"):
+                    self.assertEqual(
+                        branch["properties"][key], schema["properties"][key]
+                    )
+                self.assertEqual(branch["properties"]["syntax"]["type"], "string")
+                syntax = branch["properties"]["syntax"]["const"]
+                args = inputs(
+                    item,
+                    syntax,
+                    {"arguments": "list"} if syntax == "raw" else {"token_1": "list"},
+                )
+                validate(args, branch)
+                for key in ("buffer", "registry_revision", "syntax", "params"):
+                    incomplete = {k: v for k, v in args.items() if k != key}
+                    with self.assertRaises(ValidationError):
+                        validate(incomplete, branch)
 
     def test_fallbacks(self):
         for syntax in [
@@ -143,7 +171,12 @@ class CompilerTests(unittest.TestCase):
         )
         for item in manifest["commands"]:
             args = inputs(item, "raw", {"arguments": ""})
-            validate(args, tool_spec(item)["inputSchema"])
+            schema = tool_spec(item)["inputSchema"]
+            validate(args, schema)
+            for branch in schema["oneOf"]:
+                self.assertEqual(set(branch["properties"]), set(schema["properties"]))
+                self.assertEqual(branch["required"], schema["required"])
+            validate(args, schema["oneOf"][-1])
             self.assertEqual(serialize(item, args), "")
 
     def test_source_evidence_and_drift(self):
@@ -200,3 +233,111 @@ class CompilerTests(unittest.TestCase):
                 for t in WeeChatAPI(runtime, full_control=False).tools()
             )
         )
+
+
+class GeneratedToolFastMCPTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        from fastmcp import Client
+
+        from bridge import create_server
+
+        self.runtime = Runtime()
+        self.backend = FakeBackend()
+        self.backend.api = WeeChatAPI(self.runtime, full_control=True)
+        self.backend.protocol = BridgeProtocol(self.backend.api)
+        self.client = Client(create_server(self.backend))
+        await self.client.__aenter__()
+        self.tools = {
+            tool.name: tool
+            for tool in await self.client.list_tools()
+            if tool.name.startswith("weechat_cmd_")
+        }
+        self.items = self.backend.api.command_manifest()["commands"]
+
+    async def asyncTearDown(self):
+        await self.client.__aexit__(None, None, None)
+
+    async def test_schema_directed_typed_and_raw_calls_keep_common_fields(self):
+        self.assertEqual(len(self.tools), len(self.runtime.records))
+        for item in self.items:
+            tool = self.tools[item["tool_name"]]
+            for branch in tool.input_schema["oneOf"]:
+                syntax = branch["properties"]["syntax"]["const"]
+                with self.subTest(command=item["name"], syntax=syntax):
+                    args = inputs(
+                        item,
+                        syntax,
+                        {"arguments": 'list "two words"'}
+                        if syntax == "raw"
+                        else {"token_1": "list", "name": "hello"},
+                    )
+                    # Some connectors expose a selected oneOf branch as the whole
+                    # function schema and drop arguments that it does not declare.
+                    forwarded = {
+                        key: value
+                        for key, value in args.items()
+                        if key in branch["properties"]
+                    }
+                    self.assertEqual(forwarded, args)
+                    validate(forwarded, branch)
+                    result = await self.client.call_tool(tool.name, forwarded)
+                    self.assertFalse(result.is_error)
+                    expected = 'list "two words"' if syntax == "raw" else "list hello"
+                    self.assertEqual(
+                        self.runtime.calls[-1],
+                        (
+                            "core",
+                            f"/command {item['plugin']} /{item['name']} {expected}",
+                        ),
+                    )
+
+    async def test_invalid_generated_calls_do_not_dispatch(self):
+        item = next(c for c in self.items if c["name"] == "test")
+        for syntax in ("v0", "raw"):
+            good = inputs(
+                item,
+                syntax,
+                {"arguments": "list"} if syntax == "raw" else {"token_1": "list"},
+            )
+            invalid = [
+                {k: v for k, v in good.items() if k != "buffer"},
+                {k: v for k, v in good.items() if k != "registry_revision"},
+                dict(good, registry_revision="stale"),
+                dict(good, buffer="unknown.buffer"),
+                dict(good, syntax="unknown"),
+                dict(good, extra="unexpected"),
+                dict(good, params=dict(good["params"], extra="unexpected")),
+                dict(
+                    good,
+                    params={"token_1": "list"}
+                    if syntax == "raw"
+                    else {"arguments": "list"},
+                ),
+                dict(
+                    good,
+                    params={"arguments": "list\n/quit"}
+                    if syntax == "raw"
+                    else {"token_1": "invalid"},
+                ),
+            ]
+            for args in invalid:
+                with self.subTest(syntax=syntax, arguments=args):
+                    result = await self.client.call_tool(
+                        item["tool_name"], args, raise_on_error=False
+                    )
+                    self.assertTrue(result.is_error)
+                    self.assertFalse(self.runtime.calls)
+
+    async def test_registry_drift_rejects_previously_discovered_call(self):
+        item = next(c for c in self.items if c["name"] == "test")
+        current = next(
+            r
+            for r in self.runtime.records
+            if (r["plugin"], r["name"]) == (item["plugin"], item["name"])
+        )
+        current["args_description"] += " changed"
+        result = await self.client.call_tool(
+            item["tool_name"], inputs(item), raise_on_error=False
+        )
+        self.assertTrue(result.is_error)
+        self.assertFalse(self.runtime.calls)
