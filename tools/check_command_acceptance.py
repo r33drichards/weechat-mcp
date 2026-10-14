@@ -127,25 +127,40 @@ def main():
                     for v in item["variants"]
                     if v["syntax"].startswith("list|listfull")
                 )
-                result = client.tool(
-                    item["tool_name"],
-                    {
+                tool = next(t for t in discovered if t["name"] == item["tool_name"])
+                for syntax, params in [
+                    (variant["id"], {"token_1": "list"}),
+                    ("raw", {"arguments": "list"}),
+                ]:
+                    arguments = {
                         "buffer": "core.weechat",
                         "registry_revision": item["revision"],
-                        "syntax": variant["id"],
-                        "params": {"token_1": "list"},
-                    },
-                )
-                assert not result.get("isError"), result
-                assert json.loads(result["content"][0]["text"])["dispatched"]
-                accepted.append(
-                    {
-                        "transport": "MCP stdio",
-                        "command": "irc/server",
-                        "syntax": variant["id"],
-                        "dispatched": True,
+                        "syntax": syntax,
+                        "params": params,
                     }
-                )
+                    branch = next(
+                        b
+                        for b in tool["inputSchema"]["oneOf"]
+                        if b["properties"]["syntax"]["const"] == syntax
+                    )
+                    # Model hosts that expose an alternative on its own and only
+                    # forward declared fields, rather than the root's siblings.
+                    forwarded = {
+                        k: v for k, v in arguments.items() if k in branch["properties"]
+                    }
+                    assert forwarded == arguments
+                    Draft202012Validator(branch).validate(forwarded)
+                    result = client.tool(item["tool_name"], forwarded)
+                    assert not result.get("isError"), result
+                    assert json.loads(result["content"][0]["text"])["dispatched"]
+                    accepted.append(
+                        {
+                            "transport": "MCP stdio",
+                            "command": "irc/server",
+                            "syntax": syntax,
+                            "dispatched": True,
+                        }
+                    )
             finally:
                 client.close()
             snapshot = request("history", uri="weechat://buffer/core.weechat")

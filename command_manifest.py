@@ -6,7 +6,7 @@ import json
 import re
 
 SCHEMA_VERSION = 1
-GENERATOR_VERSION = "1"
+GENERATOR_VERSION = "2"
 LINE = r"^[^\x00-\x1f\x7f]*$"
 TOKEN = r"^[^\s\"'\\\x00-\x1f\x7f]+$"
 
@@ -149,28 +149,40 @@ def build_manifest(records, weechat_version="unknown", source=None):
 
 
 def tool_spec(item):
-    branches = []
-    for variant in item["variants"]:
-        branches.append(
-            {
-                "properties": {
-                    "syntax": {"const": variant["id"]},
-                    "params": variant["schema"],
-                }
-            }
-        )
-    branches.append(
-        {
+    common = {
+        "buffer": {
+            "type": "string",
+            "description": "Exact full buffer name; core.weechat is valid",
+        },
+        "registry_revision": {"type": "string", "const": item["revision"]},
+    }
+    required = ["buffer", "registry_revision", "syntax", "params"]
+
+    def branch(syntax, params):
+        # Hosts may flatten oneOf into function signatures without retaining
+        # sibling properties. Every branch must be a complete callable schema.
+        return {
+            "type": "object",
             "properties": {
-                "syntax": {"const": "raw"},
-                "params": {
-                    "type": "object",
-                    "properties": {"arguments": {"type": "string", "pattern": LINE}},
-                    "required": ["arguments"],
-                    "additionalProperties": False,
-                },
-            }
+                **common,
+                "syntax": {"type": "string", "const": syntax},
+                "params": params,
+            },
+            "required": required,
+            "additionalProperties": False,
         }
+
+    branches = [branch(v["id"], v["schema"]) for v in item["variants"]]
+    branches.append(
+        branch(
+            "raw",
+            {
+                "type": "object",
+                "properties": {"arguments": {"type": "string", "pattern": LINE}},
+                "required": ["arguments"],
+                "additionalProperties": False,
+            },
+        )
     )
     return {
         "name": item["tool_name"],
@@ -192,15 +204,11 @@ def tool_spec(item):
         "inputSchema": {
             "type": "object",
             "properties": {
-                "buffer": {
-                    "type": "string",
-                    "description": "Exact full buffer name; core.weechat is valid",
-                },
-                "registry_revision": {"type": "string", "const": item["revision"]},
+                **common,
                 "syntax": {"type": "string"},
                 "params": {"type": "object"},
             },
-            "required": ["buffer", "registry_revision", "syntax", "params"],
+            "required": required,
             "additionalProperties": False,
             "oneOf": branches,
         },

@@ -316,6 +316,12 @@ maintained set of command-specific functions. Each command exposes:
 - `params`: named string placeholders and literal/enum tokens for that variant;
   raw mode instead accepts `{ "arguments": "verbatim WeeChat arguments" }`
 
+Each `oneOf` alternative is a complete input object, including the required
+`buffer` and `registry_revision` fields. This keeps those fields visible to hosts
+that expose alternatives as standalone function signatures. Generator version 2
+changes the revision constants; rediscover tools after upgrading. The bridge and
+runtime still validate the full call, including variant parameters and revision.
+
 Parsing is intentionally conservative: independent trailing optional arguments,
 angle-bracket placeholders, literal words and explicit literal alternatives.
 Placeholders remain strings; names like `port` do not prove numeric types. Empty
