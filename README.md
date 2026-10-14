@@ -86,6 +86,22 @@ Runtime IRC settings:
 - `IRC_NICK`: default `weechat-mcp`
 - `IRC_CHANNELS`: comma-separated channel names, default `#wchat`
 
+Persistence:
+
+- `WEECHAT_HOME`: optional absolute path of a persistent WeeChat home, such as a
+  Railway volume mounted at `/data/weechat`. Without it WeeChat runs from a
+  temporary directory that is discarded on exit and the settings above are
+  reapplied on every start. With it, the `IRC_*` settings and the exposed-buffer
+  allowlist are applied only on the **first** boot (no `weechat.conf` yet); after
+  that the saved configuration is authoritative, so runtime edits made through
+  the exposed `/set` command (for example widening
+  `plugins.var.python.mcp.buffers`, or changing autojoin) survive restarts.
+  WeeChat saves its configuration on clean shutdown (`SIGTERM`), or sooner with
+  `/save`. To re-apply changed environment settings, edit the saved config or
+  remove `weechat.conf` from the volume. The image starts as root only to make
+  the volume private to UID/GID 10001, then drops privileges permanently before
+  WeeChat or the bridge run; the home must not be world/group-writable.
+
 The fixed server alias is `docker`; exposed buffers are `irc.docker.#wchat`, etc.
 Only configured channels are exposed, never all IRC buffers or direct messages.
 For a local plaintext IRC test set both `IRC_TLS=false` and `IRC_PORT=6667` (or

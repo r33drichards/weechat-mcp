@@ -2,13 +2,15 @@
 """Packaging configuration/security and supervisor cleanup regressions."""
 
 import asyncio
+import stat
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
 from bridge import create_server, http_settings
-from container_entrypoint import configuration, stop
+from container_entrypoint import configuration, home, initialize_home, stop
 
 PRIVATE_ENV = {
     "MCP_AUTH_MODE": "railway-private",
@@ -137,6 +139,39 @@ class ConfigurationTests(unittest.TestCase):
         ):
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 http_settings({**PRIVATE_ENV, key: value})
+
+    def test_later_boot_skips_environment_setup(self):
+        env = {"IRC_HOST": "irc.example.org", "IRC_CHANNELS": "#one"}
+        first = configuration(env, first_boot=True)
+        later = configuration(env, first_boot=False)
+        self.assertIn("/server add docker irc.example.org/6697 -tls", first)
+        self.assertNotIn("/server add docker irc.example.org/6697 -tls", later)
+        self.assertFalse(any(c.startswith("/set ") for c in later))
+        self.assertEqual(later[0], "/plugin load irc")
+        self.assertEqual(later[-1], "/connect docker")
+        self.assertTrue(any(c.startswith("/python load ") for c in later))
+
+    def test_home_validation(self):
+        self.assertIsNone(home({}))
+        self.assertIsNone(home({"WEECHAT_HOME": ""}))
+        self.assertEqual(home({"WEECHAT_HOME": "/data/weechat"}), Path("/data/weechat"))
+        for value in ("relative/path", "/data/../etc"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                home({"WEECHAT_HOME": value})
+
+    def test_initialize_home_detects_first_boot_and_clears_stale_socket(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "weechat"
+            self.assertTrue(initialize_home(path, drop=lambda: None))
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+            (path / "weechat.conf").write_text("")
+            (path / "mcp").mkdir()
+            (path / "mcp" / "bridge.sock").write_text("")
+            self.assertFalse(initialize_home(path, drop=lambda: None))
+            self.assertFalse((path / "mcp" / "bridge.sock").exists())
+            path.chmod(0o777)
+            with self.assertRaises(ValueError):
+                initialize_home(path, drop=lambda: None)
 
     def test_stop_escalates_and_reaps(self):
         child = Mock()

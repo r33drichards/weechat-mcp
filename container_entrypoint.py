@@ -1,18 +1,28 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Run an isolated WeeChat and its stdio MCP bridge; stdout is protocol-only."""
 
+import contextlib
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 
+UID = GID = 10001
+DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
-def configuration(env):
-    """Validate all command interpolation, including WeeChat expression syntax."""
+
+def configuration(env, first_boot=True):
+    """Validate all command interpolation, including WeeChat expression syntax.
+
+    With a persistent WEECHAT_HOME, environment-derived settings (server, nick,
+    channels, exposed buffers) are only applied on the first boot; afterwards the
+    saved configuration is authoritative so runtime `/set` edits survive restarts.
+    """
     host = env.get("IRC_HOST", "")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", host):
         raise ValueError("IRC_HOST must be a DNS hostname or IPv4 address")
@@ -32,18 +42,87 @@ def configuration(env):
         raise ValueError("IRC_CHANNELS must be comma-separated #channel names")
     if len(channels) > 20 or len(channels) != len(set(channels)):
         raise ValueError("IRC_CHANNELS must contain 1-20 distinct channels")
-    return [
-        "/plugin load irc",
-        "/plugin load python",
-        "/python load " + str(Path(__file__).with_name("weechat_mcp.py")),
+    setup = [
         "/set plugins.var.python.mcp.buffers "
         + ",".join("irc.docker." + c for c in channels),
         f"/server add docker {host}/{port} -{'tls' if tls == 'true' else 'notls'}",
         "/set irc.server.docker.tls_verify on",
         f"/set irc.server.docker.nicks {nick}",
         "/set irc.server.docker.autojoin " + ",".join(channels),
+    ]
+    return [
+        "/plugin load irc",
+        "/plugin load python",
+        "/python load " + str(Path(__file__).with_name("weechat_mcp.py")),
+        *(setup if first_boot else []),
         "/connect docker",
     ]
+
+
+def home(env):
+    """Return the persistent WeeChat home from WEECHAT_HOME, or None for a temp dir."""
+    value = env.get("WEECHAT_HOME", "")
+    if not value:
+        return None
+    path = Path(value)
+    if not path.is_absolute() or any(part == ".." for part in path.parts):
+        raise ValueError("WEECHAT_HOME must be an absolute path")
+    return path
+
+
+def drop_privileges():
+    """Permanently become the service user when started as root (no-op otherwise)."""
+    if os.getuid() != 0:
+        return
+    os.setgroups([])
+    os.setresgid(GID, GID, GID)
+    os.setresuid(UID, UID, UID)
+    if (
+        os.getresuid() != (UID, UID, UID)
+        or os.getresgid() != (GID, GID, GID)
+        or os.getgroups()
+    ):
+        raise ValueError("Privilege drop failed")
+
+
+def initialize_home(path, drop=drop_privileges):
+    """Make the persistent home private to the service user, dropping root if held.
+
+    Railway mounts volumes root-owned, so the image starts as root when a volume
+    is used. Only the home directory itself is chowned (through its descriptor,
+    never following links); existing contents are left as they are.
+    """
+    if os.getuid() == 0:
+        path.mkdir(mode=0o700, exist_ok=True)
+        fd = os.open(path, DIRECTORY_FLAGS)
+        try:
+            info = os.fstat(fd)
+            if (
+                info.st_uid not in (0, UID)
+                or info.st_gid not in (0, GID)
+                or info.st_mode & 0o022
+            ):
+                raise ValueError("Unsafe WEECHAT_HOME ownership or permissions")
+            os.fchmod(fd, 0o700)
+            os.fchown(fd, UID, GID)
+        finally:
+            os.close(fd)
+        drop()
+    else:
+        path.mkdir(mode=0o700, exist_ok=True)
+    info = os.stat(path, follow_symlinks=False)
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid not in (os.getuid(), UID)
+        or info.st_mode & 0o022
+    ):
+        raise ValueError("WEECHAT_HOME is not a private directory owned by this user")
+    # A stale IPC endpoint from a previous run would make the bridge connect
+    # before WeeChat's plugin is listening.
+    for name in ("bridge.sock", "loopback-port"):
+        with contextlib.suppress(FileNotFoundError):
+            (path / "mcp" / name).unlink()
+    return not (path / "weechat.conf").exists()
 
 
 def stop(process):
@@ -57,7 +136,7 @@ def stop(process):
 
 
 def run():
-    commands = configuration(os.environ)
+    configuration(os.environ)  # Validate before touching storage or privileges.
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
     if transport not in ("stdio", "http"):
         raise ValueError("MCP_TRANSPORT must be stdio or http")
@@ -66,6 +145,15 @@ def run():
 
         http_settings(os.environ)  # Fail before connecting IRC if HTTP is unsafe.
     os.umask(0o077)
+    persistent = home(os.environ)
+    if persistent is not None:
+        first_boot = initialize_home(persistent)
+        profile_dir = contextlib.nullcontext(str(persistent))
+    else:
+        drop_privileges()
+        first_boot = True
+        profile_dir = tempfile.TemporaryDirectory(prefix="weechat-mcp-")
+    commands = configuration(os.environ, first_boot=first_boot)
     stopping = 0
 
     def on_signal(signum, frame):
@@ -75,9 +163,9 @@ def run():
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, on_signal)
     children = []
-    with tempfile.TemporaryDirectory(prefix="weechat-mcp-") as profile:
+    with profile_dir as profile:
         try:
-            env = dict(os.environ)
+            env = dict(os.environ, HOME=str(profile))
             loopback = env.get("WEECHAT_MCP_LOOPBACK_PORT")
             if loopback not in (None, "0"):
                 raise ValueError(

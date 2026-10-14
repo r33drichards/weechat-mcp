@@ -12,6 +12,8 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-editable --no-cache
 COPY bridge.py command_manifest.py weechat_mcp.py container_entrypoint.py LICENSE ./
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
-USER weechat
+# Starts as root only to take ownership of an optional WEECHAT_HOME volume mount,
+# then permanently drops to the unprivileged weechat user before running anything.
+USER 0:0
 # HTTP requires a bearer unless explicitly using guarded Railway-private mode.
 ENTRYPOINT ["python", "/app/container_entrypoint.py"]
