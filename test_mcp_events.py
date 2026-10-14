@@ -580,6 +580,76 @@ class EventTests(unittest.IsolatedAsyncioTestCase):
 
         await asyncio.wait_for(wait_for_delivery(), 1)
 
+    async def test_worker_cancel_is_not_lost_to_concurrent_wakeup(self):
+        self.manager.task = task = asyncio.create_task(self.manager.run())
+        try:
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            self.manager.wake.set()
+            await asyncio.sleep(0)
+            task.cancel()
+            done, _ = await asyncio.wait({task}, timeout=1)
+            self.assertIn(task, done)
+            self.assertTrue(task.cancelled())
+        finally:
+            # Rescue a broken implementation without hanging the test teardown.
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    def delayed_history(self):
+        reply = asyncio.get_running_loop().create_future()
+        started = asyncio.Event()
+
+        async def delayed(operation, **params):
+            self.assertEqual(operation, "event_history")
+            started.set()
+            # Mirror the inherited IPC request completion/cancel race on 3.10.
+            return await asyncio.wait_for(reply, 10)
+
+        self.backend.request = delayed  # ty: ignore[invalid-assignment]
+        return reply, started
+
+    async def close_on_history_reply(self, reply, snapshot):
+        async def reply_and_close():
+            # Complete the inner future and cancel its waiting worker without
+            # yielding between the two operations.
+            reply.set_result(snapshot)
+            await self.manager.close()
+
+        closing = asyncio.create_task(reply_and_close())
+        try:
+            done, _ = await asyncio.wait({closing}, timeout=1)
+            self.assertIn(closing, done)
+            await closing
+        finally:
+            # Rescue old implementations whose first cancel was swallowed.
+            if not closing.done():
+                for task in (self.manager.task, self.manager.intake_task):
+                    if task is not None:
+                        task.cancel()
+                await asyncio.gather(closing, return_exceptions=True)
+
+    async def test_close_exits_intake_when_history_completes_concurrently(self):
+        await self.subscribe()
+        snapshot = copy.deepcopy(self.backend.snapshots[CHANNEL])
+        reply, started = self.delayed_history()
+        self.manager.intake_task = asyncio.create_task(self.manager.ingest_loop())
+        await started.wait()
+        await self.close_on_history_reply(reply, snapshot)
+        self.assertTrue(self.manager.closed)
+
+    async def test_close_does_not_send_when_history_completes_concurrently(self):
+        await self.subscribe()
+        self.backend.message(1)
+        await self.manager.collect()
+        snapshot = copy.deepcopy(self.backend.snapshots[CHANNEL])
+        reply, started = self.delayed_history()
+        self.manager.task = asyncio.create_task(self.manager.run())
+        await started.wait()
+        await self.close_on_history_reply(reply, snapshot)
+        self.assertEqual(self.sender.deliveries, [])
+
     async def test_backend_timeout_does_not_kill_dispatcher(self):
         await self.subscribe()
         self.backend.message(1)

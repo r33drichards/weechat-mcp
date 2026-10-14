@@ -185,6 +185,7 @@ class EventManager:
         self.verified = {}
         self.task = None
         self.closed = False
+        self.stopping = False
 
     def _lock(self, ident):
         lock = self.locks.get(ident)
@@ -532,6 +533,8 @@ class EventManager:
         ).fetchall()
         snapshots = {}
         for row in rows:
+            if self.stopping:
+                return
             args = json.loads(row["arguments"])
             buffer = args["channel_id"]
             if channel is not None and buffer != channel:
@@ -554,6 +557,8 @@ class EventManager:
                         "DELETE FROM subscriptions WHERE id=?", (row["id"],)
                     )
                 continue
+            if self.stopping:
+                return
             with self.db:
                 self._ingest(row["id"], snapshots[buffer])
 
@@ -637,7 +642,7 @@ class EventManager:
                         "DELETE FROM subscriptions WHERE id=?", (sub["id"],)
                     )
                 return
-            if sub["expires"] <= self.clock():
+            if self.stopping or sub["expires"] <= self.clock():
                 return
             keys = [sub["secret"]]
             if sub["old_secret"] and sub["rotate_until"] > self.clock():
@@ -702,7 +707,7 @@ class EventManager:
                     )
 
     async def ingest_loop(self):
-        while True:
+        while not self.stopping:
             await self.intake_wake.wait()
             self.intake_wake.clear()
             dirty, self.dirty = self.dirty, set()
@@ -714,6 +719,8 @@ class EventManager:
                         await self.collect(channel)
             except (ConnectionError, asyncio.TimeoutError):
                 self.dirty.add(None)
+            if self.stopping:
+                return
             self.wake.set()
             if self.dirty:
                 # Retry temporarily unavailable local channels without dropping grants.
@@ -721,9 +728,11 @@ class EventManager:
                 self.intake_wake.set()
 
     async def run(self):
-        while True:
+        while not self.stopping:
             self.wake.clear()
             await self.deliver_once()
+            if self.stopping:
+                return
             ready = self.db.execute(
                 """SELECT 1 FROM subscriptions s JOIN outbox o ON o.subscription=s.id
                 WHERE s.expires>? AND s.suspended=0 AND o.status='pending' AND o.due<=?
@@ -735,10 +744,14 @@ class EventManager:
                 # Drain bursts promptly, yielding to intake and unsubscribe handlers.
                 await asyncio.sleep(0)
                 continue
+            # Python 3.10 wait_for can swallow external cancellation when its
+            # inner wait completes concurrently. Await the event directly so
+            # shutdown cannot lose cancellation to an intake wakeup.
+            timer = asyncio.get_running_loop().call_later(1, self.wake.set)
             try:
-                await asyncio.wait_for(self.wake.wait(), 1)
-            except asyncio.TimeoutError:
-                pass
+                await self.wake.wait()
+            finally:
+                timer.cancel()
 
     def start(self):
         if self.task is None:
@@ -749,6 +762,8 @@ class EventManager:
     async def close(self):
         if self.closed:
             return
+        # Also bound shutdown if an IPC wait swallowed cancellation on 3.10.
+        self.stopping = True
         tasks = [task for task in (self.task, self.intake_task) if task is not None]
         for task in tasks:
             task.cancel()
