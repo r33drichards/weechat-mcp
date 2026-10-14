@@ -44,38 +44,58 @@ class Runner:
             )
 
     def ingest(self, snapshot):
-        epoch = snapshot["epoch"]
+        epoch = snapshot.get("data_epoch", snapshot["epoch"])
         lines = snapshot["lines"]
         if not isinstance(epoch, str) or not epoch:
             raise ValueError("Resource needs a nonempty epoch")
-        if not lines:
-            return 0
-        # Plugin sequence is global; per-buffer sequence gaps do not imply data loss.
-        # Loss is explicitly signalled using per-buffer eviction watermark.
+        # Native IDs are per buffer and can be sparse. Detect omitted actual rows
+        # and conservatively reject a saved cursor older than native retention.
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             row = self.db.execute(
                 "SELECT sequence FROM cursor WHERE epoch=?", (epoch,)
             ).fetchone()
+            if (
+                row is None
+                and self.db.execute("SELECT 1 FROM cursor LIMIT 1").fetchone()
+            ):
+                raise HistoryGap(
+                    "Native buffer lifetime changed; reconcile before starting a new cursor"
+                )
             cursor = row[0] if row else 0
-            if snapshot.get("evicted_through", 0) > cursor:
+            if not lines:
+                last_id = snapshot.get("last_assigned_id")
+                if row and last_id is not None and last_id + 1 > cursor:
+                    raise HistoryGap("Native lines were cleared before intake")
+                return 0
+            omitted = snapshot.get("omitted_through_id")
+            retained_from = snapshot.get("oldest_available_id")
+            if (omitted is not None and omitted + 1 > cursor) or (
+                cursor > 0 and retained_from is not None and retained_from > cursor
+            ):
                 raise HistoryGap(
                     "Retained resource history no longer covers saved cursor"
                 )
             added = 0
             high = cursor
             for line in lines:
-                seq = line["sequence"]
-                if not isinstance(seq, int) or seq < 1:
-                    raise ValueError("Invalid message sequence")
+                native_id = line["id"]
+                if type(native_id) is not int or native_id < 0:
+                    raise ValueError("Invalid native line ID")
+                seq = native_id + 1
                 high = max(high, seq)
                 if seq <= cursor:
                     continue
-                author = irc_fold(line.get("nick", ""))
+                tags = line["tags"]
+                author = irc_fold(
+                    next((tag[5:] for tag in tags if tag.startswith("nick_")), "")
+                )
                 text = irc_fold(line.get("message", ""))
                 # Only actual nick-tagged IRC messages; never notices/status prompts.
                 if (
                     author
+                    and set(tags) & {"irc_privmsg", "irc_action"}
+                    and "notify_self" not in tags
                     and author != self.nick
                     and re.search(
                         r"(?<![\w{}|~\-])@?" + re.escape(self.nick) + r"(?![\w{}|~\-])",

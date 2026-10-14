@@ -1,16 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """WeeChat MCP plugin. All WeeChat calls run on its event loop, never threads."""
 
-import collections
 import json
 import os
 import socket
 import sys
-import uuid
 from urllib.parse import quote, unquote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from command_manifest import build_manifest, serialize, tool_spec  # noqa: E402
+from native_buffer import MAX_LINES, NativeBuffers  # noqa: E402
 
 MAX_FRAME = 65536
 SAFE_COMMANDS = {"msg", "say", "me", "names", "who", "topic"}
@@ -32,11 +31,15 @@ class BridgeProtocol:
                 result = list(self.api.buffers())
             elif operation == "call":
                 result = self.api.call(req["name"], req.get("arguments", {}))
-            elif operation == "history":
-                result = self.api.history(self.api.resolve(req["uri"]))
+            elif operation == "buffer_data":
+                result = self.api.buffer_data(self.api.resolve(req["uri"]), MAX_LINES)
+            elif operation == "event_history":
+                result = self.api.event_history(req["uri"])
             else:
                 raise ValueError("Unknown bridge operation")
             return {"id": ident, "result": result}
+        except ConnectionError as e:
+            return {"id": ident, "error": str(e), "error_code": "channel_unavailable"}
         except (ValueError, KeyError, TypeError) as e:
             return {"id": ident, "error": str(e)}
 
@@ -54,10 +57,7 @@ class WeeChatAPI:
         if self.full_control and source_path:
             with open(source_path) as source_file:
                 self.command_source = json.load(source_file)
-        self.lines = collections.defaultdict(lambda: collections.deque(maxlen=200))
-        self.evicted = collections.defaultdict(int)
-        self.sequence = 0
-        self.epoch = str(uuid.uuid4())
+        self.native = NativeBuffers(w)
 
     def buffers(self):
         # Explicit scope: other channels, private messages, and core buffers are not exposed.
@@ -165,34 +165,29 @@ class WeeChatAPI:
         tools = [
             {
                 "name": "weechat_buffers",
-                "description": "List explicitly exposed buffers",
+                "description": "List exposed buffers, or read one buffer's native metadata and line data. Pages include filtered lines, oldest first, and can include lines from before plugin load. Pass next_cursor to read older lines. Command dispatch and asynchronous replies are separate; a read is not a command-completion acknowledgement.",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "buffer": {
+                            "type": "string",
+                            "description": "An explicitly exposed full buffer name; omit to list names",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": MAX_LINES,
+                            "default": 100,
+                        },
+                        "cursor": {
+                            "type": "string",
+                            "description": "Opaque next_cursor from this buffer's previous page",
+                        },
+                    },
                     "additionalProperties": False,
                 },
             }
         ]
-        tools.append(
-            {
-                "name": "weechat_read_recent_messages",
-                "description": "Read recent printed lines from an exposed buffer, oldest first. Only the latest 200 lines since plugin load are retained; older scrollback is not imported.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "buffer": {"type": "string"},
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 200,
-                            "default": 50,
-                        },
-                    },
-                    "required": ["buffer"],
-                    "additionalProperties": False,
-                },
-            }
-        )
         tools.append(
             {
                 "name": "weechat_command_catalog",
@@ -265,27 +260,16 @@ class WeeChatAPI:
             if name.startswith("weechat_cmd_"):
                 return self.call_generated(name, args)
         if name == "weechat_buffers":
-            return list(self.buffers())
-        if name == "weechat_read_recent_messages":
-            if set(args) - {"buffer", "limit"}:
-                raise ValueError("Unexpected history argument")
+            if set(args) - {"buffer", "limit", "cursor"}:
+                raise ValueError("Unexpected buffer argument")
+            if not args:
+                return list(self.buffers())
             b = args.get("buffer")
-            limit = args.get("limit", 50)
             if not isinstance(b, str):
-                raise ValueError("Buffer must be a string")
-            if type(limit) is not int or not 1 <= limit <= 200:
-                raise ValueError("Limit must be an integer from 1 to 200")
-            # Reuse resource resolution so current scope/revocation always applies.
-            snapshot = self.history(self.resolve(self.uri(b)))
-            lines = snapshot["lines"]
-            return {
-                **snapshot,
-                "buffer": b,
-                "lines": lines[-limit:],
-                "available": len(lines),
-                "returned": min(limit, len(lines)),
-                "truncated": len(lines) > limit,
-            }
+                raise ValueError("Buffer must be a string when reading data")
+            if "cursor" in args and not isinstance(args["cursor"], str):
+                raise ValueError("Cursor must be a string")
+            return self.buffer_data(b, args.get("limit", 100), args.get("cursor"))
         if name == "weechat_command_catalog":
             return [
                 {
@@ -346,14 +330,35 @@ class WeeChatAPI:
             raise ValueError("Buffer is not exposed")
         return b
 
-    def history(self, b):
-        return {
-            "epoch": self.epoch,
-            "evicted_through": self.evicted[b],
-            "lines": list(self.lines[b]),
-            "retained": 200,
-            "since": "plugin load; older lines not imported",
-        }
+    def buffer_data(self, b, limit=100, cursor=None):
+        # Always resolve the current allowlist, including when using a cursor.
+        pointer = self.buffers().get(b)
+        if not pointer:
+            raise ValueError("Buffer is not exposed")
+        return self.native.snapshot(b, pointer, limit, cursor)
+
+    def event_history(self, uri):
+        if not isinstance(uri, str) or not uri.startswith("weechat://buffer/"):
+            raise ValueError("Unknown resource")
+        b = unquote(uri[len("weechat://buffer/") :])
+        if b not in set(self.w.config_get_plugin("buffers").split(",")):
+            raise ValueError("Buffer is not exposed")
+        pointer = self.buffers().get(b)
+        if not pointer:
+            raise ConnectionError("Channel temporarily unavailable")
+        if (
+            not b.startswith("irc.")
+            or self.w.buffer_get_string(pointer, "localvar_type") != "channel"
+        ):
+            raise ValueError("Buffer is not an exposed IRC channel")
+        try:
+            return self.native.event_snapshot(b, pointer)
+        except ValueError as error:
+            # A native data/read limit is not a permission revocation. Events
+            # must retain the grant and retry instead of deleting its outbox.
+            raise ConnectionError(
+                "Native channel data unavailable: " + str(error)
+            ) from error
 
 
 clients = {}
@@ -425,23 +430,18 @@ def printed(data, buffer, date, tags, displayed, highlight, prefix, message):
     assert api is not None
     name = api.w.buffer_get_string(buffer, "full_name")
     if name in api.buffers():
-        api.sequence += 1
-        if len(api.lines[name]) == api.lines[name].maxlen:
-            api.evicted[name] = api.lines[name][0]["sequence"]
-        api.lines[name].append(
-            {
-                "sequence": api.sequence,
-                "date": date,
-                "prefix": api.w.string_remove_color(prefix, ""),
-                "nick": next(
-                    (t[5:] for t in tags.split(",") if t.startswith("nick_")), ""
-                ),
-                "message": api.w.string_remove_color(message, ""),
-            }
-        )
         uri = api.uri(name)
         for sock, state in list(clients.items()):
             send(sock, {"event": "updated", "uri": uri})
+    return api.w.WEECHAT_RC_OK
+
+
+def buffer_closing(data, signal, pointer):
+    assert api is not None
+    # Closing fires while the buffer name/pointer are still valid. Invalidate
+    # cursors even on pre-4.3 versions without a native unique buffer ID.
+    name = api.w.buffer_get_string(pointer, "full_name")
+    api.native.invalidate(name, pointer)
     return api.w.WEECHAT_RC_OK
 
 
@@ -497,4 +497,5 @@ if weechat and weechat.register(
     listener.setblocking(False)
     weechat.hook_timer(50, 0, 0, "tick", "")
     weechat.hook_print("", "", "", 1, "printed", "")
+    weechat.hook_signal("buffer_closing", "buffer_closing", "")
     weechat.prnt("", "MCP local socket ready: " + endpoint)
