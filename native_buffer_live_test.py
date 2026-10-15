@@ -37,6 +37,7 @@ def main():
         env = dict(
             os.environ,
             WEECHAT_MCP_LOOPBACK_PORT="0",
+            WEECHAT_MCP_FULL_CONTROL="0",
             NATIVE_TEST_CONTROL=str(control),
             NATIVE_TEST_REPO=str(repo),
         )

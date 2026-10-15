@@ -33,7 +33,7 @@ The event catalog contains `message.created` with required arguments:
 - `trigger`: `message` or `mention`
 - `nick`: required only for `mention`
 
-Only IRC channel buffers in the existing read allowlist qualify. This does not expand the read allowlist, join channels, send messages, or enable private-message monitoring. Own-nick messages, `notify_self` messages, notices and status lines are excluded. Mentions use whole-nick boundaries and RFC1459 case folding; ASCII/strict-RFC1459 server-specific case mappings are not yet negotiated.
+Only IRC channel buffers exposed by the selected policy qualify: all current native IRC channels in default full mode, or configured allowlisted channels with `WEECHAT_MCP_FULL_CONTROL=0`. A newly joined full-mode channel is eligible only for a separately requested subscription. Joining/discovery does not create subscriptions or enable private-message monitoring. Own-nick messages, `notify_self` messages, notices and status lines are excluded. Mentions use whole-nick boundaries and RFC1459 case folding; ASCII/strict-RFC1459 server-specific case mappings are not yet negotiated.
 
 Subscription identity hashes authenticated owner, exact callback URL, event name and canonical argument JSON. Refresh is idempotent. Unsubscribe uses that same identity, succeeds if already absent, deletes queued events and secrets, and waits for an already-started delivery for that subscription to finish before acknowledging. An accepted/in-flight request cannot be recalled.
 
