@@ -52,9 +52,14 @@ def tick(data, remaining):
             w.command("", "/wait 2 /python load " + repo + "/weechat_mcp.py")
         else:
             raise ValueError("Unknown fixture action")
-        response.write_text(json.dumps({"id": request["id"], "ok": True}))
+        result = {"id": request["id"], "ok": True}
     except Exception as error:
-        response.write_text(json.dumps({"id": request["id"], "error": str(error)}))
+        result = {"id": request["id"], "error": str(error)}
+    # The test polls this file while the callback runs. Never expose a truncated
+    # result, including failures, before the complete response is ready.
+    temporary = response.with_name(response.name + ".tmp")
+    temporary.write_text(json.dumps(result))
+    temporary.replace(response)
     return w.WEECHAT_RC_OK
 
 
