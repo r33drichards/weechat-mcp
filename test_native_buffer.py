@@ -17,7 +17,7 @@ class NativeBufferTests(unittest.TestCase):
         # Existing native lines predate the adapter, without any printed hook.
         for i in range(650):
             self.w.add_line(str(i))
-        self.api = plugin.WeeChatAPI(self.w)
+        self.api = plugin.WeeChatAPI(self.w, full_control=False)
 
     def read(self, **kwargs):
         return self.api.call("weechat_buffers", {"buffer": NAME, **kwargs})

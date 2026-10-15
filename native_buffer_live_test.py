@@ -21,6 +21,26 @@ def wait_for(predicate, timeout=10):
     raise AssertionError("Isolated native buffer test timed out")
 
 
+def run_fixture(control, request_id, action):
+    # The fixture polls from another process. Publish only complete JSON, and
+    # keep control/result temporary names distinct in their shared directory.
+    temporary = control.with_name(control.name + ".tmp")
+    temporary.write_text(json.dumps({"id": request_id, "action": action}))
+    temporary.replace(control)
+    response = control.with_suffix(".result")
+
+    def read_result():
+        try:
+            result = json.loads(response.read_text())
+        except FileNotFoundError:
+            return None
+        # Check and return the same snapshot, even if publication races a poll.
+        return result if result["id"] == request_id else None
+
+    result = wait_for(read_result)
+    assert result.get("ok"), result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weechat-root", required=True)
@@ -32,11 +52,11 @@ def main():
         work = Path(temporary)
         home = work / "home"
         control = work / "control.json"
-        response = control.with_suffix(".result")
         endpoint = home / "mcp" / "loopback-port"
         env = dict(
             os.environ,
             WEECHAT_MCP_LOOPBACK_PORT="0",
+            WEECHAT_MCP_FULL_CONTROL="0",
             NATIVE_TEST_CONTROL=str(control),
             NATIVE_TEST_REPO=str(repo),
         )
@@ -79,16 +99,7 @@ def main():
         def fixture(action):
             nonlocal counter
             counter += 1
-            control.write_text(json.dumps({"id": counter, "action": action}))
-            result = wait_for(
-                lambda: (
-                    json.loads(response.read_text())
-                    if response.exists()
-                    and json.loads(response.read_text())["id"] == counter
-                    else None
-                )
-            )
-            assert result.get("ok"), result
+            run_fixture(control, counter, action)
 
         def reject_cursor(cursor):
             try:

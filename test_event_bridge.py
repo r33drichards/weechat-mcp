@@ -53,7 +53,7 @@ class CaptureFake(Fake):
 class CaptureTests(unittest.TestCase):
     def setUp(self):
         self.fake = CaptureFake()
-        self.api = plugin.WeeChatAPI(self.fake)
+        self.api = plugin.WeeChatAPI(self.fake, full_control=False)
         self.protocol = plugin.BridgeProtocol(self.api)
 
     def test_revocation_distinct_from_temporary_missing_buffer(self):
@@ -141,7 +141,7 @@ class SettingsTests(unittest.TestCase):
 
 class LocalBackend:
     def __init__(self):
-        self.api = plugin.WeeChatAPI(CaptureFake())
+        self.api = plugin.WeeChatAPI(CaptureFake(), full_control=False)
         self.protocol = plugin.BridgeProtocol(self.api)
         self.events = InMemorySubscriptionBus()
         self.on_buffer_updated = lambda uri: None
@@ -181,7 +181,7 @@ class IntegratedProtocolTests(unittest.IsolatedAsyncioTestCase):
                 public_epoch = backend.api.buffer_data("irc.railway.#wchat")["epoch"]
                 backend.api.w.add_line("queued before reload")
                 await manager.collect()
-                backend.api = plugin.WeeChatAPI(backend.api.w)
+                backend.api = plugin.WeeChatAPI(backend.api.w, full_control=False)
                 backend.protocol = plugin.BridgeProtocol(backend.api)
                 self.assertNotEqual(
                     public_epoch, backend.api.buffer_data("irc.railway.#wchat")["epoch"]

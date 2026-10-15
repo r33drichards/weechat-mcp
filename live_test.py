@@ -59,7 +59,10 @@ try:
         )
         time.sleep(0.3)
         home = work + "/profile"
-        env = dict(os.environ, WEECHAT_MCP_LOOPBACK_PORT="0")
+        # This fixture exercises legacy scoped-adapter restrictions explicitly.
+        env = dict(
+            os.environ, WEECHAT_MCP_LOOPBACK_PORT="0", WEECHAT_MCP_FULL_CONTROL="0"
+        )
         cmd = [root + "/usr/bin/weechat-headless", "-d", home, "-p", "--stdout"]
         commands = [
             "/plugin load " + root + "/usr/lib/x86_64-linux-gnu/weechat/plugins/irc.so",

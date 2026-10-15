@@ -220,13 +220,16 @@ class CompilerTests(unittest.TestCase):
             )
         )
 
-    def test_history_scope_unchanged_and_opt_in(self):
+    def test_full_control_reads_contexts_and_restricted_opt_out(self):
         runtime = Runtime()
         api = WeeChatAPI(runtime, full_control=True)
         self.assertIn("core.weechat", api.command_buffers())
-        self.assertNotIn("core.weechat", api.buffers())
+        self.assertIn("core.weechat", api.buffers())
+        self.assertEqual(api.resolve(api.uri("core.weechat")), "core.weechat")
+        restricted = WeeChatAPI(runtime, full_control=False)
+        self.assertNotIn("core.weechat", restricted.buffers())
         with self.assertRaises(ValueError):
-            api.resolve(api.uri("core.weechat"))
+            restricted.resolve(restricted.uri("core.weechat"))
         self.assertFalse(
             any(
                 t["name"].startswith("weechat_cmd_")

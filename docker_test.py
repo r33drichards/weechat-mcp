@@ -461,6 +461,8 @@ def main():
     irc_port, http_port = allocate_ports()
     token = None if args.railway_private else secrets.token_urlsafe(32)
     settings = {
+        # Keep scoped adapter/permission regression checks explicit.
+        "WEECHAT_MCP_FULL_CONTROL": "0",
         "MCP_TRANSPORT": "http",
         "MCP_AUTH_MODE": "bearer",
         # Even in host-network Docker mode, keep this test listener private.

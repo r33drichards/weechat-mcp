@@ -68,7 +68,7 @@ class Fake(NativeFake):
 class Tests(unittest.TestCase):
     def setUp(self):
         self.w = Fake()
-        self.api = m.WeeChatAPI(self.w)
+        self.api = m.WeeChatAPI(self.w, full_control=False)
         self.p = m.BridgeProtocol(self.api)
 
     def test_scope(self):
@@ -162,7 +162,7 @@ class Tests(unittest.TestCase):
 
 class FakeBackend:
     def __init__(self):
-        self.api = m.WeeChatAPI(Fake())
+        self.api = m.WeeChatAPI(Fake(), full_control=False)
         self.protocol = m.BridgeProtocol(self.api)
         from mcp.server.subscriptions import InMemorySubscriptionBus
 
