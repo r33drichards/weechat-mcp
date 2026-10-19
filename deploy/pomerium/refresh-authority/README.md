@@ -1,6 +1,7 @@
 # WeeChat shared refresh-token repair
 
-Local candidate, not deployed or published. AI-assisted implementation and review
+Candidate published for CI in the user deployment repository; not yet deployed.
+AI-assisted implementation and review
 using OpenAI dot. This is a private deployment patch, not an upstream contribution.
 
 ## Scope and ownership
@@ -8,7 +9,8 @@ using OpenAI dot. This is a private deployment patch, not an upstream contributi
 Pinned Pomerium v0.33.3: 76042ed40db3bab9506b689f436716b6df624f23.
 The deployment wrapper was prepared from the f822f5a snapshot and ported onto
 GitHub main 7d934730 without replacing later bridge changes. Actual deployed
-route/config additions must be preserved separately during snapshot rollout.
+DIP/Claude isolated-route renderer additions have been preserved and regression
+tested against the audited live renderer.
 Dex rotation, initial interactive authentication, S256 PKCE, downstream client
 binding, session/grant expiry, and upstream claim revalidation remain in place.
 No production credentials were read, generated, rotated, or configured.

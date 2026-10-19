@@ -19,6 +19,7 @@ import ssl
 import subprocess
 import tempfile
 import time
+import traceback
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 
@@ -596,8 +597,12 @@ assert 'refresh authority already locked' in result.stdout + result.stderr, 'Mis
                 "Topology validation failed; container logs omitted to protect token material"
             )
             if args.refresh_flow:
+                frames = traceback.extract_tb(exc.__traceback__)
+                locations = " -> ".join(
+                    f"{Path(frame.filename).name}:{frame.lineno}" for frame in frames
+                )
                 raise SystemExit(
-                    f"Authenticated topology check failed ({type(exc).__name__}); sensitive exception details suppressed"
+                    f"Authenticated topology check failed ({type(exc).__name__}) at {locations}; sensitive exception details suppressed"
                 ) from None
             raise
         finally:
