@@ -341,6 +341,32 @@ assert (s.st_uid, s.st_gid, s.st_mode & 0o777) == (10001, 10001, 0o700)
                     capture_output=True,
                 ).stdout.strip()
 
+            # A second gateway using the same state must fail before services start.
+            # No token records are read; startup reuses only synthetic fixture keys.
+            docker(
+                "exec",
+                "--user",
+                "10001:10001",
+                pom,
+                "python",
+                "-c",
+                """
+import subprocess
+from pathlib import Path
+root = Path('/data/databroker.refresh-authority')
+assert root.is_dir() and (root.stat().st_mode & 0o777) == 0o700
+lock = root / '.lock'
+assert lock.is_file() and (lock.stat().st_mode & 0o777) == 0o600
+result = subprocess.run(
+    ['python', '-I', '/app/service_entrypoint.py', 'pomerium'],
+    capture_output=True, text=True, timeout=20,
+)
+assert result.returncode != 0, 'Second gateway unexpectedly started'
+assert 'refresh authority already locked' in result.stdout + result.stderr, 'Missing process lock rejection'
+""",
+            )
+            print("PASS refresh authority rejects a second process on the same volume")
+
             original_keys = persisted_key_digest()
             discovery = json.loads(body)
             assert discovery["issuer"] == "https://" + AUTH + "/dex"

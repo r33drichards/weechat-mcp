@@ -24,6 +24,9 @@ deploy/auth/**
 !deploy/pomerium/
 deploy/pomerium/**
 !deploy/pomerium/Dockerfile
+!deploy/pomerium/refresh-authority/
+deploy/pomerium/refresh-authority/**
+!deploy/pomerium/refresh-authority/pomerium-refresh-authority.patch
 deploy/generated/
 **/.env
 **/.env.*
