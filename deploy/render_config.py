@@ -101,6 +101,26 @@ def configuration(service, env):
         ):
             raise ValueError("OWNER_EMAIL must be the exact email returned by Dex")
         values["BACKEND_HEADERS"] = backend_headers(env, values["BACKEND_ORIGIN"])
+        # Optional isolated resources share owner policy and auth, not backend state.
+        public_origins = {values["MCP_ORIGIN"], values["AUTH_ORIGIN"]}
+        backend_origins = {values["BACKEND_ORIGIN"]}
+        for prefix in ("DIP", "CLAUDE"):
+            public_key, backend_key = f"{prefix}_MCP_ORIGIN", f"{prefix}_BACKEND_ORIGIN"
+            if not (env.get(public_key) or env.get(backend_key)):
+                continue
+            if env.get("MCP_AUTH_MODE") != "railway-private":
+                raise ValueError(
+                    f"{prefix.lower()} route requires railway-private mode"
+                )
+            values[public_key] = origin(public_key, env, True)
+            if values[public_key] in public_origins:
+                raise ValueError(f"{prefix.lower()} MCP origin must be distinct")
+            values[backend_key] = origin(backend_key, env)
+            if values[backend_key] in backend_origins:
+                raise ValueError(f"{prefix.lower()} backend must be isolated")
+            backend_headers(env, values[backend_key])
+            public_origins.add(values[public_key])
+            backend_origins.add(values[backend_key])
     if service in ("all", "auth"):
         values["POMERIUM_INTERNAL_ORIGIN"] = origin("POMERIUM_INTERNAL_ORIGIN", env)
         values["AUTH_AUTHORITY"] = urlsplit(values["AUTH_ORIGIN"]).netloc
@@ -131,6 +151,18 @@ def render(service, env, output):
         extension = "conf" if name == "router" else "yaml"
         text = (root / f"{name}.{extension}.template").read_text()
         if name == "pomerium":
+            base_route = text.split("\nroutes:\n", 1)[1]
+            for prefix in ("DIP", "CLAUDE"):
+                if f"{prefix}_MCP_ORIGIN" not in values:
+                    continue
+                route = base_route.replace(
+                    "name: weechat-mcp", f"name: {prefix.lower()}"
+                )
+                route = route.replace("@@MCP_ORIGIN@@", f"@@{prefix}_MCP_ORIGIN@@")
+                route = route.replace(
+                    "@@BACKEND_ORIGIN@@", f"@@{prefix}_BACKEND_ORIGIN@@"
+                )
+                text += route
             # Insert the fixed fragment before scalar interpolation, so user
             # input cannot introduce a raw-fragment placeholder of its own.
             text = text.replace("@@BACKEND_HEADERS@@", values["BACKEND_HEADERS"])

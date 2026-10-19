@@ -35,35 +35,49 @@
 
 ## Real Dex coverage and limits
 
-A synthetic full Dex v2.46.0 HTTP token-endpoint test passed strict rotation across
-alternating and concurrent consumers plus coordinator restart. Direct old-bearer
-replay returned invalid_grant. Simulated response loss after successful HTTP
-rotation prevented another call, including after restart.
+Real Dex v2.46.0 sessions-disabled HTTP acceptance now passes for both memory
+and SQLite, with strict rotation and synthetic connector identities. Three runs
+per backend cover 16 alternating/concurrent refreshes, authority restart, direct
+old-bearer invalid_grant, and simulated lost-response fail-closed behavior.
 
-This is not a full deployed Pomerium/Dex/GitHub authorization flow. The successful
-fixture enables Dex sessions and uses a stored synthetic identity. Both the initial sessions-disabled in-memory fixture and a separate plain-Dex
-SQLite fixture (no coordinator) hit a nested-storage deadlock on the second
-refresh. Production uses SQLite without a sessions stanza. This confirmed
-additional blocker must be repaired and verified separately; enabling sessions merely to make the test pass
-is not an approved production remedy. No real GitHub credentials or login were
-used. See the separate Dex acceptance evidence for fixture details.
+The original plain-Dex SQLite test (without any coordinator) reproduced a real
+nested-storage deadlock at refresh two. A separately reviewed 17-line read-order
+change fixes it without moving connector refresh outside current-token validation.
+The complete Dex server and token race suites pass with both HTTP acceptance tags.
+The portable CI bundle copies the exact patched coordinator source, rather than
+maintaining another implementation. Cross-client shared rotating connector
+credentials remain outside this narrow single-client fix.
+
+These checks use synthetic connector identities, not live GitHub. The packet-loss
+case injects a client error after a real successful HTTP response. They do not
+claim a complete deployed Pomerium browser/MCP/GitHub flow. A Pomerium command
+compile with external-asset tags also passed; it is not the full UI/Envoy image.
 
 ## Not yet verified; required before live deployment
 
-1. Build the actual source-patched Pomerium image and gateway wrapper, including
+1. Rebuild the final source-patched Pomerium and Dex images. The first CI run
+   successfully built Pomerium including UI/Envoy and passed its race tests;
+   topology boot and real Dex PKCE checks passed. The process-lock probe failed
+   because its Python isolated-mode invocation removed sibling imports; the
+   probe now uses the same invocation as the production supervisor. Final image
+   integration still needs a passing run, including
    UI/Envoy assets. Docker/Podman is unavailable in this local workspace. A local
    Go compile-only binary, if built with external-asset tags, is not this image.
 2. Run the prepared GitHub Actions source build and isolated container topology
    smoke, including same-volume second-process rejection and container restart.
    The user approved branch/draft-PR CI publication and deployment when ready;
    this approval does not establish technical readiness.
-3. Verify repeated sessions-disabled SQLite Dex refresh with fresh connector
-   identity checks, followed by the complete two-client Pomerium flow in an
-   isolated image. Do not claim the sessions-enabled fixture proves this.
+3. Run the complete two-client Pomerium/Dex flow in the isolated final images,
+   retaining the now-passing sessions-disabled SQLite connector checks. The
+   opt-in --refresh-flow fixture uses synthetic mockCallback identity and checks
+   two complete DCR/PKCE grants, overlapping strict-rotation refreshes and
+   refresh after process recreation. Its execution is pending. Live source audit
+   confirmed exactly one Dex client, pomerium, inherited by all three routes.
 4. Verify final source/patch/image digests and the live service's one-replica,
    one-volume, all-in-one configuration. No old/new writer overlap is allowed.
-5. Obtain explicit approval for the gateway rollout and expected one-time browser
-   and MCP reauthorization. Any actual GitHub login stays with the user/secure
+5. The user authorized deployment when ready; confirm readiness and communicate
+   the expected one-time browser/MCP reauthorization before rollout. Any actual
+   GitHub login stays with the user/secure
    login flow. Never retrieve or paste production credentials into test fixtures.
 
 ## Storage and logs
@@ -77,4 +91,7 @@ The new refresh path returns generic failure messages without token response
 bodies or bearers; it does not log token values. Existing unrelated authentication
 logging is unchanged. No production secrets were read or included in artifacts.
 
-Decision: reviewed source candidate; not approved or proven ready for live rollout.
+Decision: deployment authorized when ready; technical rollout gates still pending.
+
+Live gateway DIP/Claude route-renderer additions are preserved with regression
+tests for distinct private backends and the same owner-only authentication policy.

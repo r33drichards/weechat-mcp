@@ -106,10 +106,10 @@ jobs:
   auth_topology:
     name: Patched Pomerium and Dex auth topology
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build the pinned refresh-authority source with race tests
         run: timeout 1800s bash deploy/pomerium/refresh-authority/build.sh
       - name: Build both auth images and verify the two-origin TLS topology
-        run: timeout 600s python3 deploy/container_auth_test.py
+        run: timeout 1800s python3 deploy/container_auth_test.py --refresh-flow

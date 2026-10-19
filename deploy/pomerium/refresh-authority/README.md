@@ -6,10 +6,18 @@ using OpenAI dot. This is a private deployment patch, not an upstream contributi
 ## Scope and ownership
 
 Pinned Pomerium v0.33.3: 76042ed40db3bab9506b689f436716b6df624f23.
-The deployment wrapper is based on the previously deployed f822f5a snapshot.
+The deployment wrapper was prepared from the f822f5a snapshot and ported onto
+GitHub main 7d934730 without replacing later bridge changes. Actual deployed
+route/config additions must be preserved separately during snapshot rollout.
 Dex rotation, initial interactive authentication, S256 PKCE, downstream client
 binding, session/grant expiry, and upstream claim revalidation remain in place.
 No production credentials were read, generated, rotated, or configured.
+
+The candidate also includes a separately reviewed Dex v2.46.0 read-order fix.
+Its sessions-disabled SQLite path otherwise deadlocks on the second refresh.
+Only stored connector-data lookup moves before the transaction; token validation
+and actual connector refresh remain inside it. The schema, sessions setting,
+rotation, scopes, and client checks do not change. See dex-acceptance/README.md.
 
 Each generic OIDC login stores its Dex refresh bearer in a private durable record
 and returns an opaque reference in the existing OAuth refresh-token field. The
@@ -43,6 +51,11 @@ old-token fallback.
   split services, clustering, or replicas with separate/copied volumes.
 - DSN files and managed mode are rejected. Route providers must remain generic
   OIDC public clients. Configuration reload cannot move the database path.
+- Deploy the bounded Dex/auth image fix first, preserving all current routes,
+  environment values, volumes and frontend assets. Its storage schema is unchanged.
+  Then replace the gateway with no old/new overlap and reauthorize affected
+  browser/MCP connections. Validate any additional upstream Dex clients sharing
+  rotating connector credentials before using this single-client repair.
 - Stop old writers before startup. Do not overlap old and new image versions.
   An old binary does not participate in the new lock and cannot be fenced by it.
 - Existing raw-token sessions/grants are intentionally not imported. Affected
@@ -59,11 +72,11 @@ by this patch. It repairs shared upstream Dex token ownership only.
 
 ## Building the candidate
 
-With Git, Python 3 and Docker installed, from the repository root run:
+With Docker installed, from the repository root run:
 
     deploy/pomerium/refresh-authority/build.sh
 
-The multi-stage Dockerfile fetches the exact Pomerium commit, checks/applies this patch, runs the
+The gateway multi-stage Dockerfile fetches the exact Pomerium commit, checks/applies this patch, runs the
 focused Go race suites in the pinned upstream build stage, builds its UI/Envoy
 assets with the upstream Docker workflow, and builds the gateway wrapper locally. A clean remote Docker builder can use
 this same Dockerfile; no unpublished local base tag or registry upload is required.
@@ -74,3 +87,8 @@ verify final image digests and scan the candidate before rollout.
 The local source checks do not replace an actual container build, isolated
 end-to-end image checks, or the separately approved live smoke/reconnection step.
 See VALIDATION.md for actual completed checks and remaining limits.
+
+The auth-service Dockerfile also builds the exact patched Dex source and runs the
+portable sessions-disabled SQLite/coordinator acceptance suite before compilation.
+It keeps the pinned original Dex frontend assets. The PR auth-topology job builds
+both images; building only the gateway is not sufficient for this repair.
