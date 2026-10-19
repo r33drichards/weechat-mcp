@@ -358,7 +358,7 @@ assert (s.st_uid, s.st_gid, s.st_mode & 0o777) == (10001, 10001, 0o700)
             docker(
                 "exec",
                 "--user",
-                "10001:10001",
+                "0:0",
                 pom,
                 "python",
                 "-c",
@@ -370,11 +370,17 @@ assert root.is_dir() and (root.stat().st_mode & 0o777) == 0o700
 lock = root / '.lock'
 assert lock.is_file() and (lock.stat().st_mode & 0o777) == 0o600
 result = subprocess.run(
-    ['python', '/app/service_entrypoint.py', 'pomerium'],
+    ['python', '-I', '/app/volume_entrypoint.py', 'pomerium'],
     capture_output=True, text=True, timeout=20,
 )
 assert result.returncode != 0, 'Second gateway unexpectedly started'
-assert 'refresh authority already locked' in result.stdout + result.stderr, 'Missing process lock rejection'
+output = result.stdout + result.stderr
+if 'refresh authority already locked' not in output:
+    # Fixed diagnostics only; never emit raw service output or key material.
+    known = ('Volume initialization failed', 'Local keys require the fully dropped service identity',
+             'Services must not run as root', 'Configuration or service startup failed')
+    print('Second-process preflight:', [marker for marker in known if marker in output], flush=True)
+    raise AssertionError('Missing process lock rejection')
 """,
             )
             print("PASS refresh authority rejects a second process on the same volume")
