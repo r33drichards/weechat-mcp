@@ -24,6 +24,10 @@ deploy/auth/**
 !deploy/pomerium/
 deploy/pomerium/**
 !deploy/pomerium/Dockerfile
+!deploy/pomerium/refresh-authority/
+!deploy/pomerium/refresh-authority/**
+!deploy/pomerium/refresh-authority/dex-acceptance/
+!deploy/pomerium/refresh-authority/dex-acceptance/**
 deploy/generated/
 **/.env
 **/.env.*
