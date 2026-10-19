@@ -69,6 +69,8 @@ class Browser:
 
     def authorize(self, url, state, expect_login):
         saw_pkce = False
+        previous = None
+        dispatcher_request = None
         for hop in range(30):
             parsed = urlsplit(url)
             if (
@@ -89,23 +91,71 @@ class Browser:
                 "Refused redirect outside synthetic fixture"
             )
             if parsed.hostname == self.auth_host and parsed.path == "/dex/auth":
-                query = parse_qs(parsed.query)
-                assert query.get("code_challenge_method") == ["S256"]
-                assert len(query.get("code_challenge", [""])[0]) >= 43
-                assert query.get("client_id") == ["pomerium"]
-                assert query.get("redirect_uri") == [
-                    f"https://{self.auth_host}/oauth2/callback"
-                ]
-                saw_pkce = True
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                if "req" in query:
+                    # Pinned Dex uses /auth for both OAuth entry and its signed
+                    # post-connector dispatcher. The latter carries req+hmac,
+                    # not a second copy of the original PKCE parameters. Dex
+                    # validates the HMAC; here validate its fixture-only shape
+                    # and ordering without claiming to verify its signature.
+                    assert saw_pkce, "Dex dispatcher preceded S256 authorization"
+                    assert previous is not None and (
+                        previous.hostname == self.auth_host
+                        and previous.path.startswith("/dex/")
+                    ), "Dex dispatcher did not follow a fixture Dex redirect"
+                    assert set(query) == {"req", "hmac"}, (
+                        "Unexpected Dex dispatcher parameters"
+                    )
+                    assert all(
+                        len(query[name]) == 1 and query[name][0]
+                        for name in ("req", "hmac")
+                    ), "Missing or duplicated Dex dispatcher proof"
+                    if dispatcher_request is not None:
+                        assert dispatcher_request == query["req"][0], (
+                            "Dex dispatcher changed authorization request"
+                        )
+                    dispatcher_request = query["req"][0]
+                else:
+                    assert not saw_pkce, (
+                        "Unexpected repeated upstream OAuth authorization"
+                    )
+                    assert query.get("code_challenge_method") == ["S256"]
+                    assert len(query.get("code_challenge", [])) == 1
+                    assert len(query["code_challenge"][0]) >= 43
+                    assert query.get("client_id") == ["pomerium"]
+                    assert query.get("response_type") == ["code"]
+                    assert query.get("redirect_uri") == [
+                        f"https://{self.auth_host}/oauth2/callback"
+                    ]
+                    saw_pkce = True
             req = Request(url)
             self.cookies.add_cookie_header(req)
             status, headers, _ = self.request(url, headers=dict(req.header_items()))
+            # Log only enumerated paths: an unexpected path might itself carry
+            # a credential. Never print query strings, Location, or cookies.
+            safe_paths = {
+                "/.pomerium/mcp/authorize",
+                "/.pomerium/callback/",
+                "/.pomerium/sign_in",
+                "/oauth2/callback",
+                "/dex/auth",
+                "/dex/auth/synthetic",
+                "/dex/callback",
+                "/dex/approval",
+            }
+            path_label = parsed.path if parsed.path in safe_paths else "<other>"
+            role = "auth" if parsed.hostname == self.auth_host else "mcp"
+            print(
+                f"OAuth hop={hop} host={role} path={path_label} status={status}",
+                flush=True,
+            )
             # CookieJar only calls info(); the transport has already read the body.
             self.cookies.extract_cookies(CookieResponse(headers), req)  # ty: ignore[invalid-argument-type]
             assert status in (302, 303, 307, 308), (
                 f"OAuth redirect hop {hop} returned HTTP {status}"
             )
             assert headers.get("Location"), "OAuth redirect has no Location"
+            previous = parsed
             url = urljoin(url, headers["Location"])
         raise AssertionError("OAuth flow exceeded redirect limit")
 
