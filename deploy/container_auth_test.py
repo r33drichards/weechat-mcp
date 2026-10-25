@@ -408,9 +408,9 @@ if 'refresh authority already locked' not in output:
             assert metadata["issuer"] == issuer
             assert "S256" in metadata["code_challenge_methods_supported"]
             flow = (
-                RefreshFlow(
-                    request, metadata, resource["resource"], AUTH, MCP
-                ).establish()
+                RefreshFlow(request, metadata, resource["resource"], AUTH, MCP)
+                .establish()
+                .establish_independent()
                 if args.refresh_flow
                 else None
             )

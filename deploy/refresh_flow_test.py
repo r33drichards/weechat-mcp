@@ -187,6 +187,8 @@ class RefreshFlow:
         self.request = request
         self.metadata = metadata
         self.resource = resource
+        self.auth_host = auth_host
+        self.mcp_host = mcp_host
         self.browser = Browser(request, auth_host, mcp_host)
         self.clients = []
 
@@ -258,6 +260,74 @@ class RefreshFlow:
             flush=True,
         )
         self.exercise("before restart")
+        return self
+
+    def establish_independent(self):
+        """Issue #10: a fresh browser login is an independent lineage.
+
+        The earlier flow deliberately shares one browser session between both
+        clients. This adds a third client that authenticates through its own
+        browser (a genuinely new upstream login) and proves it does not
+        replace the refresh records of the first two: all three lineages keep
+        refreshing, including concurrently."""
+        status, _, body = self.request(
+            self.metadata["registration_endpoint"],
+            "POST",
+            {
+                "client_name": "Synthetic refresh client 3",
+                "redirect_uris": [CALLBACK],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+            },
+            {"Content-Type": "application/json"},
+        )
+        assert status in (200, 201), f"DCR returned HTTP {status}"
+        client_id = json.loads(body)["client_id"]
+        assert all(client["client_id"] != client_id for client in self.clients)
+        verifier = secrets.token_urlsafe(48)
+        challenge = (
+            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+            .decode()
+            .rstrip("=")
+        )
+        state = secrets.token_urlsafe(24)
+        url = (
+            self.metadata["authorization_endpoint"]
+            + "?"
+            + urlencode(
+                {
+                    "response_type": "code",
+                    "client_id": client_id,
+                    "redirect_uri": CALLBACK,
+                    "state": state,
+                    "code_challenge": challenge,
+                    "code_challenge_method": "S256",
+                    "resource": self.resource,
+                }
+            )
+        )
+        fresh = Browser(self.request, self.auth_host, self.mcp_host)
+        code = fresh.authorize(url, state, expect_login=True)
+        tokens = token_request(
+            self.request,
+            self.metadata["token_endpoint"],
+            {
+                "grant_type": "authorization_code",
+                "client_id": client_id,
+                "redirect_uri": CALLBACK,
+                "code": code,
+                "code_verifier": verifier,
+                "resource": self.resource,
+            },
+        )
+        self.clients.append({"client_id": client_id, "tokens": tokens})
+        assert len(self.clients) == 3
+        self.exercise("independent login added")
+        print(
+            "PASS independent browser login: three lineages refresh, no replacement",
+            flush=True,
+        )
         return self
 
     def refresh(self, client):

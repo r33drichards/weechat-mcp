@@ -27,19 +27,29 @@ trap cleanup EXIT HUP INT TERM
 
 # Compute exact expected target files from HEAD in an isolated directory. Accept
 # only pristine targets or this exact patch, never unrelated target-file edits.
-mkdir -p "$work/expected/server/grants"
+mkdir -p "$work/expected/server/grants" "$work/expected/server/tokens"
 git -C "$work/expected" init -q
 git -C "$dex" show HEAD:server/grants/refresh.go > "$work/original-refresh.go"
 cp "$work/original-refresh.go" "$work/expected/server/grants/refresh.go"
+git -C "$dex" show HEAD:server/tokens/refresh_store.go > "$work/expected/server/tokens/refresh_store.go"
+git -C "$dex" show HEAD:server/tokens/refresh_store_test.go > "$work/expected/server/tokens/refresh_store_test.go"
+git -C "$dex" show HEAD:server/server_test.go > "$work/expected/server/server_test.go"
 git -C "$work/expected" apply "$here/dex-refresh-read-order.patch"
+git -C "$work/expected" apply "$here/dex-issue-10-independent-grants.patch"
 if cmp -s "$work/expected/server/grants/refresh.go" "$dex/server/grants/refresh.go" &&
-   cmp -s "$work/expected/server/weechat_sqlite_deadlock_test.go" "$dex/server/weechat_sqlite_deadlock_test.go"; then
-    echo "Verified already-applied Dex read-order patch."
+   cmp -s "$work/expected/server/tokens/refresh_store.go" "$dex/server/tokens/refresh_store.go" &&
+   cmp -s "$work/expected/server/weechat_sqlite_deadlock_test.go" "$dex/server/weechat_sqlite_deadlock_test.go" &&
+   cmp -s "$work/expected/server/weechat_independent_grants_test.go" "$dex/server/weechat_independent_grants_test.go" &&
+   cmp -s "$work/expected/server/weechat_shared_connector_test.go" "$dex/server/weechat_shared_connector_test.go"; then
+    echo "Verified already-applied Dex read-order and issue #10 patches."
 elif cmp -s "$work/original-refresh.go" "$dex/server/grants/refresh.go" &&
-     [ ! -e "$dex/server/weechat_sqlite_deadlock_test.go" ]; then
+     [ ! -e "$dex/server/weechat_sqlite_deadlock_test.go" ] &&
+     [ ! -e "$dex/server/tokens/connlock.go" ]; then
     git -C "$dex" apply --check "$here/dex-refresh-read-order.patch"
     git -C "$dex" apply "$here/dex-refresh-read-order.patch"
-    echo "Applied Dex read-order patch and SQLite regression."
+    git -C "$dex" apply --check "$here/dex-issue-10-independent-grants.patch"
+    git -C "$dex" apply "$here/dex-issue-10-independent-grants.patch"
+    echo "Applied Dex read-order and issue #10 patches (independent grants + shared-refresh serialization)."
 else
     echo "refusing unexpected edits to Dex patch target files" >&2
     exit 1
@@ -80,6 +90,6 @@ cd "$dex"
 echo "Testing exact patched coordinator source:"
 sha256sum "$coordinator" "$work/refreshcoord/coordinator.go"
 "$go" test -p=2 -race -count=1 -timeout=120s \
-    -tags 'weechat_acceptance weechat_sqlite_acceptance' \
+    -tags 'weechat_acceptance weechat_sqlite_acceptance weechat_independent_grants weechat_shared_connector' \
     -mod=mod -modfile="$work/dex.mod" \
     ./server ./server/grants ./server/tokens
