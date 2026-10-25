@@ -291,3 +291,5 @@ class JevEventTests(unittest.IsolatedAsyncioTestCase):
     def test_container_includes_optional_module(self):
         dockerfile = Path(__file__).with_name("Dockerfile").read_text()
         self.assertIn("jev_filter.py", dockerfile)
+        context = Path(__file__).with_name(".dockerignore").read_text()
+        self.assertIn("!jev_filter.py", context.splitlines())
