@@ -61,3 +61,42 @@ simulate packet loss. The harness does not exercise live GitHub, the full
 Pomerium browser/MCP integration, or production deployment. Separate acceptance
 is required for those surfaces. The normal Dex server suite also runs, covering
 its existing client/scope/rotation/session checks.
+
+## Issue #10 increment: independent grants and shared-upstream serialization
+
+dex-issue-10-independent-grants.patch (applied by run.sh after the read-order
+patch) changes Dex's refresh-grant semantics per issue #10:
+
+- Bug 1: an offline session keeps one reference per login lineage
+  (grant:<tokenID> keys alongside the newest-per-client key). A new login for
+  the same user+connector+client no longer deletes the previous token record;
+  only a re-login within the same browser session replaces its own
+  predecessor, and MaxClientGrantRefs (8) bounds lineages with explicit
+  oldest-first revocation. Rotation and revocation paths resolve grants by
+  token ID; session-end revocation is scoped to the ended session.
+- Bug 2: grants of the same (user, connector) share one upstream credential.
+  The refresh grant now serializes the connector-data read, upstream refresh,
+  and rotation commit behind a per-(user, connector) process lock
+  (server/tokens/connlock.go), so a waiting lineage renews with the successor
+  token instead of a consumed one. Rotation, PKCE, client binding, expiry,
+  revocation, and reuse windows are unchanged; nothing is cached or skipped.
+
+New regression suites (both storages, real loopback HTTP, strict rotation):
+
+- weechat_independent_grants: login A refreshes; independent login B starts;
+  both refresh; same-session re-login replaces only its predecessor; cap
+  eviction revokes the oldest explicitly; grant references present.
+- weechat_shared_connector: a synthetic single-use rotating upstream with a
+  widened race window; two distinct clients refresh concurrently and both
+  must succeed with exactly two upstream renewals; persisted successor is
+  checked; serial control, forced upstream failure + retry, process restart
+  over the same SQLite file, and RevokeAll semantics are covered.
+
+Dex's own TestRefreshStoreCreate and TestRefreshTokenFlow encoded the old
+replacement contract and are updated to the new one (independent re-login
+keeps both grants valid; same-session replacement still revokes).
+
+Verified 2026-10-25 on Go 1.27.3 with CGO sqlite: full ./server/... and
+./storage/... suites green, both new suites green individually and together,
+and race-enabled (-race) runs green. run.sh applies both patches in order and
+runs all four tags.
