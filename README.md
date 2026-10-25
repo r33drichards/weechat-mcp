@@ -452,3 +452,9 @@ commands, every callback's semantics, other WeeChat versions, or public access.
 ## Optional MCP Events
 
 [MCP Events](MCP_EVENTS.md) adds explicit, per-chat webhook subscriptions for incoming messages or nick mentions in a chosen exposed IRC channel. It is disabled unless a private persistent `MCP_EVENTS_DB` path is configured. Startup, joining channels and ordinary tool calls never subscribe a chat. The host supplies its callback/signing secret only after the user explicitly asks to monitor a channel; unsubscribe stops that chat's grant. See the guide for authentication, replay limits, configuration and rollout.
+
+MCP Events can optionally apply a per-chat **Typesafe Jev send/drop filter** to
+all incoming messages using bounded channel history and a user-set preference.
+It requires explicit operator and subscription opt-in, is disabled by default,
+and never creates or widens subscriptions automatically. See the
+[Jev configuration, disclosure and failure policy](MCP_EVENTS.md#optional-jev-preference-filter-disabled-by-default).

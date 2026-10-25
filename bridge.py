@@ -339,10 +339,13 @@ async def main():
     try:
         principal = None
         if events is not None:
+            from jev_filter import JevFilter
             from mcp_events import EventManager
 
             path, owner, principal = events
-            event_manager = EventManager(path, backend, lambda value: value == owner)
+            event_manager = EventManager(
+                path, backend, lambda value: value == owner, judge=JevFilter.from_env()
+            )
         server = create_server(
             backend, auth=auth, event_manager=event_manager, event_principal=principal
         )

@@ -578,7 +578,10 @@ class EventTests(unittest.IsolatedAsyncioTestCase):
             while len(self.sender.deliveries) < 20:
                 await asyncio.sleep(0.01)
 
-        await asyncio.wait_for(wait_for_delivery(), 1)
+        # Twenty events with a one-second sleep would take ~20 seconds. Allow
+        # fsync-heavy SQLite commits on shared CI runners without hiding that
+        # regression behind a wall-clock deadline shorter than disk latency.
+        await asyncio.wait_for(wait_for_delivery(), 5)
 
     async def test_worker_cancel_is_not_lost_to_concurrent_wakeup(self):
         self.manager.task = task = asyncio.create_task(self.manager.run())

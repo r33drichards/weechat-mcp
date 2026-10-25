@@ -31,6 +31,7 @@ from event_webhooks import (
     validate_secret,
     validate_url,
 )
+from jev_filter import FilterError
 
 EVENT_NAME = "message.created"
 INPUT_SCHEMA = {
@@ -47,6 +48,16 @@ INPUT_SCHEMA = {
             "enum": ["message", "mention"],
             "description": "Every incoming chat message, or only whole-nick mentions.",
         },
+        "jev": {
+            "type": "object",
+            "properties": {
+                "preference": {"type": "string", "minLength": 1, "maxLength": 2048},
+                "history_limit": {"type": "integer", "minimum": 0, "maximum": 50},
+            },
+            "required": ["preference"],
+            "additionalProperties": False,
+            "description": "Opt-in Jev send/drop filter. Sends this channel context and preference to Typesafe; requires operator enablement. Only for trigger=message.",
+        },
         "nick": {
             "type": "string",
             "minLength": 1,
@@ -57,6 +68,12 @@ INPUT_SCHEMA = {
     },
     "required": ["channel_id", "trigger"],
     "additionalProperties": False,
+    "allOf": [
+        {
+            "if": {"required": ["jev"]},
+            "then": {"properties": {"trigger": {"const": "message"}}},
+        }
+    ],
     "oneOf": [
         {
             "properties": {"trigger": {"const": "message"}},
@@ -120,6 +137,40 @@ def matches(arguments, line, own_nick):
     )
 
 
+def filter_context(arguments, snapshot, current, message):
+    """Snapshot bounded prior context, never future lines or another channel.
+
+    The current message stays intact. Native capture already bounds event bytes;
+    the adapter bounds the whole request and stops the grant if it cannot fit.
+    Context can include the user's own chat lines but not status/notices.
+    """
+    limit = arguments["jev"].get("history_limit", 20)
+    history = []
+    used = 0
+    truncated = bool(snapshot.get("evicted_through", 0))
+    for line in reversed(snapshot["lines"]):
+        if line["sequence"] >= current["sequence"] or not line.get("is_message"):
+            continue
+        value = {
+            "message_id": snapshot["epoch"] + ":" + str(line["sequence"]),
+            "nick": line.get("nick", ""),
+            "text": line["message"],
+        }
+        size = len(canonical(value).encode())
+        if len(history) >= limit or used + size > 32768:
+            truncated = True
+            break
+        history.append(value)
+        used += size
+    return {
+        "channel_id": arguments["channel_id"],
+        "preference": arguments["jev"]["preference"],
+        "message": message,
+        "history": list(reversed(history)),
+        "history_truncated": truncated,
+    }
+
+
 class EventManager:
     """Single-process dispatcher. SQLite transactions commit intake with outbox.
 
@@ -128,7 +179,9 @@ class EventManager:
     Per-subscription delivery is ordered so emitted cursors cannot skip backlog.
     """
 
-    def __init__(self, path, backend, owner_allowed, sender=None, clock=time.time):
+    def __init__(
+        self, path, backend, owner_allowed, sender=None, clock=time.time, judge=None
+    ):
         path = Path(path)
         if not path.is_absolute():
             raise ValueError("MCP_EVENTS_DB must be an absolute runtime path")
@@ -174,6 +227,13 @@ class EventManager:
             UNIQUE(subscription, event_key));
           CREATE INDEX IF NOT EXISTS outbox_pending ON outbox(subscription,status,position);
         """)
+        # Additive migration preserves existing unfiltered outboxes and identities.
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(outbox)")}
+        for name in ("filter_context", "decision"):
+            if name not in columns:
+                self.db.execute(f"ALTER TABLE outbox ADD COLUMN {name} TEXT")
+        self.db.commit()
+        self.judge = judge
         self.backend, self.owner_allowed = backend, owner_allowed
         self.sender, self.clock = sender or SecureWebhookSender(), clock
         self.locks = weakref.WeakValueDictionary()
@@ -290,6 +350,10 @@ class EventManager:
 
     async def subscribe(self, owner, params):
         ident, arguments, url = self._identity(owner, params)
+        if "jev" in arguments and self.judge is None:
+            raise EventError(-32602, "Jev filtering is not enabled by the operator")
+        if "jev" in arguments and not arguments["jev"]["preference"].strip():
+            raise EventError(-32602, "Jev preference must not be blank")
         secret = params["delivery"].get("secret")
         try:
             validate_secret(secret)
@@ -362,7 +426,7 @@ class EventManager:
                             ),
                         )
                         self.db.execute(
-                            "UPDATE outbox SET status='pending',attempts=0,due=0 WHERE subscription=? AND position>?",
+                            "UPDATE outbox SET status='pending',attempts=0,due=0 WHERE subscription=? AND position>? AND status!='dropped'",
                             (ident, cursor),
                         )
                     self._ingest(ident, latest)
@@ -452,7 +516,7 @@ class EventManager:
         )
         args = json.loads(row["arguments"])
         retained = self.db.execute(
-            "SELECT COUNT(*) FROM outbox WHERE subscription=? AND status!='sent'",
+            "SELECT COUNT(*) FROM outbox WHERE subscription=? AND status NOT IN ('sent','dropped')",
             (ident,),
         ).fetchone()[0]
         for line in snapshot["lines"]:
@@ -504,9 +568,14 @@ class EventManager:
                     self.db.execute(
                         "UPDATE subscriptions SET suspended=1 WHERE id=?", (ident,)
                     )
+                context = None
+                if "jev" in args:
+                    context = canonical(
+                        filter_context(args, snapshot, line, event["data"])
+                    )
                 self.db.execute(
-                    "UPDATE outbox SET payload=? WHERE position=?",
-                    (payload, added.lastrowid),
+                    "UPDATE outbox SET payload=?,filter_context=? WHERE position=?",
+                    (payload, context, added.lastrowid),
                 )
         self.db.execute(
             "UPDATE subscriptions SET epoch=?,intake=?,truncated=MAX(truncated,?),seen_native_line=? WHERE id=?",
@@ -571,11 +640,12 @@ class EventManager:
             self.db.execute(
                 """UPDATE subscriptions SET pruned_through=MAX(pruned_through,
                 COALESCE((SELECT MAX(position) FROM outbox WHERE subscription=subscriptions.id
-                AND status='sent' AND created<?),0))""",
+                AND status IN ('sent','dropped') AND created<?),0))""",
                 (now - 86400,),
             )
             self.db.execute(
-                "DELETE FROM outbox WHERE status='sent' AND created<?", (now - 86400,)
+                "DELETE FROM outbox WHERE status IN ('sent','dropped') AND created<?",
+                (now - 86400,),
             )
             self.db.execute("DELETE FROM subscriptions WHERE expires<?", (now - 86400,))
             for item in self.db.execute("SELECT id FROM subscriptions").fetchall():
@@ -585,7 +655,7 @@ class EventManager:
                 ).fetchone()
                 if cutoff:
                     removed = self.db.execute(
-                        "SELECT MAX(position) FROM outbox WHERE subscription=? AND status='sent' AND position<?",
+                        "SELECT MAX(position) FROM outbox WHERE subscription=? AND status IN ('sent','dropped') AND position<?",
                         (item["id"], cutoff[0]),
                     ).fetchone()[0]
                     if removed:
@@ -594,7 +664,7 @@ class EventManager:
                             (removed, item["id"]),
                         )
                         self.db.execute(
-                            "DELETE FROM outbox WHERE subscription=? AND status='sent' AND position<=?",
+                            "DELETE FROM outbox WHERE subscription=? AND status IN ('sent','dropped') AND position<=?",
                             (item["id"], removed),
                         )
         rows = self.db.execute(
@@ -617,7 +687,7 @@ class EventManager:
                     )
                 return
             pending = self.db.execute(
-                "SELECT * FROM outbox WHERE subscription=? AND status!='sent' ORDER BY position LIMIT 1",
+                "SELECT * FROM outbox WHERE subscription=? AND status NOT IN ('sent','dropped') ORDER BY position LIMIT 1",
                 (sub["id"],),
             ).fetchone()
             if (
@@ -642,7 +712,73 @@ class EventManager:
                         "DELETE FROM subscriptions WHERE id=?", (sub["id"],)
                     )
                 return
-            if self.stopping or sub["expires"] <= self.clock():
+            if (
+                self.stopping
+                or sub["expires"] <= self.clock()
+                or not self.owner_allowed(sub["owner"])
+            ):
+                return
+            if pending["filter_context"] is not None and pending["decision"] is None:
+                try:
+                    if self.judge is None:
+                        raise FilterError("filter_unavailable")
+                    decision = await asyncio.wait_for(
+                        self.judge.decide(json.loads(pending["filter_context"])),
+                        timeout=12,
+                    )
+                    if decision not in ("send", "drop"):
+                        raise FilterError("invalid_decision")
+                except (FilterError, asyncio.TimeoutError):
+                    # An unavailable classifier is not a semantic drop. Stop this
+                    # grant visibly rather than leaking messages or silently losing them.
+                    with self.db:
+                        self.db.execute(
+                            "UPDATE outbox SET status='failed' WHERE position=?",
+                            (pending["position"],),
+                        )
+                        self.db.execute(
+                            "UPDATE subscriptions SET suspended=1 WHERE id=?", (ident,)
+                        )
+                    return
+                # Persist before webhook I/O. Webhook retries/replay never rerun Jev.
+                with self.db:
+                    self.db.execute(
+                        "UPDATE outbox SET decision=? WHERE position=?",
+                        (decision, pending["position"]),
+                    )
+                    if decision == "drop":
+                        self.db.execute(
+                            "UPDATE outbox SET status='dropped' WHERE position=?",
+                            (pending["position"],),
+                        )
+                        self.db.execute(
+                            "UPDATE subscriptions SET acknowledged=? WHERE id=?",
+                            (pending["position"], ident),
+                        )
+                if decision == "drop":
+                    return
+                # Awaiting Jev may outlive expiry, owner revocation or channel scope.
+                if (
+                    self.stopping
+                    or sub["expires"] <= self.clock()
+                    or not self.owner_allowed(sub["owner"])
+                ):
+                    return
+                try:
+                    await self._history(json.loads(sub["arguments"])["channel_id"])
+                except (ConnectionError, asyncio.TimeoutError):
+                    return
+                except EventError:
+                    with self.db:
+                        self.db.execute(
+                            "DELETE FROM subscriptions WHERE id=?", (ident,)
+                        )
+                    return
+            if (
+                self.stopping
+                or sub["expires"] <= self.clock()
+                or not self.owner_allowed(sub["owner"])
+            ):
                 return
             keys = [sub["secret"]]
             if sub["old_secret"] and sub["rotate_until"] > self.clock():
@@ -736,7 +872,7 @@ class EventManager:
             ready = self.db.execute(
                 """SELECT 1 FROM subscriptions s JOIN outbox o ON o.subscription=s.id
                 WHERE s.expires>? AND s.suspended=0 AND o.status='pending' AND o.due<=?
-                AND o.position=(SELECT MIN(position) FROM outbox WHERE subscription=s.id AND status!='sent')
+                AND o.position=(SELECT MIN(position) FROM outbox WHERE subscription=s.id AND status NOT IN ('sent','dropped'))
                 LIMIT 1""",
                 (self.clock(), self.clock()),
             ).fetchone()

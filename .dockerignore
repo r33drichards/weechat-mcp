@@ -4,6 +4,7 @@
 !uv.lock
 !bridge.py
 !mcp_events.py
+!jev_filter.py
 !event_protocol.py
 !event_webhooks.py
 !command_manifest.py
