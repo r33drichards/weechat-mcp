@@ -7,6 +7,7 @@ root-owned volume initialization, non-root processes, and restart persistence.
 Does not claim authenticated owner/other-user login or an MCP data roundtrip.
 """
 
+import argparse
 import base64
 import hashlib
 import http.client
@@ -18,8 +19,11 @@ import ssl
 import subprocess
 import tempfile
 import time
+import traceback
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
+
+from refresh_flow_test import RefreshFlow, prepare_fixture
 
 AUTH = "auth-test.up.railway.app"
 MCP = "mcp-test.up.railway.app"
@@ -30,6 +34,9 @@ def docker(*args, **kwargs):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--refresh-flow", action="store_true")
+    args = parser.parse_args()
     if not shutil.which("docker"):
         raise SystemExit("Docker unavailable: image/topology validation was NOT run")
     root = Path(__file__).resolve().parent.parent
@@ -86,6 +93,9 @@ def main():
             "SSL_CERT_FILE": "/fixtures/ca.pem",
             "GOMAXPROCS": "2",
         }
+        auth_extra = (
+            prepare_fixture(root, fixtures, common) if args.refresh_flow else ()
+        )
         envfile = fixtures / "runtime.env"
         envfile.write_text("".join(f"{k}={v}\n" for k, v in common.items()))
         envfile.chmod(0o600)
@@ -183,6 +193,7 @@ http {{
                         else ()
                     ),
                     *extra,
+                    *(auth_extra if label == "auth" else ()),
                     image,
                     *command,
                     stdout=subprocess.DEVNULL,
@@ -315,16 +326,17 @@ assert (s.st_uid, s.st_gid, s.st_mode & 0o777) == (10001, 10001, 0o700)
             print(
                 "PASS root-owned empty volume boot; all service process identities are non-root"
             )
-            docker(
-                "exec",
-                "--user",
-                "10001:10001",
-                auth,
-                "python",
-                "/fixtures/dex_pkce_test.py",
-                "--deployment-root",
-                "/app",
-            )
+            if not args.refresh_flow:
+                docker(
+                    "exec",
+                    "--user",
+                    "10001:10001",
+                    auth,
+                    "python",
+                    "/fixtures/dex_pkce_test.py",
+                    "--deployment-root",
+                    "/app",
+                )
 
             def persisted_key_digest():
                 return docker(
@@ -340,6 +352,38 @@ assert (s.st_uid, s.st_gid, s.st_mode & 0o777) == (10001, 10001, 0o700)
                     "print(hashlib.sha256(p.read_bytes()).hexdigest())",
                     capture_output=True,
                 ).stdout.strip()
+
+            # A second gateway using the same state must fail before services start.
+            # No token records are read; startup reuses only synthetic fixture keys.
+            docker(
+                "exec",
+                "--user",
+                "0:0",
+                pom,
+                "python",
+                "-c",
+                """
+import subprocess
+from pathlib import Path
+root = Path('/data/databroker.refresh-authority')
+assert root.is_dir() and (root.stat().st_mode & 0o777) == 0o700
+lock = root / '.lock'
+assert lock.is_file() and (lock.stat().st_mode & 0o777) == 0o600
+result = subprocess.run(
+    ['python', '-I', '/app/volume_entrypoint.py', 'pomerium'],
+    capture_output=True, text=True, timeout=20,
+)
+assert result.returncode != 0, 'Second gateway unexpectedly started'
+output = result.stdout + result.stderr
+if 'refresh authority already locked' not in output:
+    # Fixed diagnostics only; never emit raw service output or key material.
+    known = ('Volume initialization failed', 'Local keys require the fully dropped service identity',
+             'Services must not run as root', 'Configuration or service startup failed')
+    print('Second-process preflight:', [marker for marker in known if marker in output], flush=True)
+    raise AssertionError('Missing process lock rejection')
+""",
+            )
+            print("PASS refresh authority rejects a second process on the same volume")
 
             original_keys = persisted_key_digest()
             discovery = json.loads(body)
@@ -363,6 +407,13 @@ assert (s.st_uid, s.st_gid, s.st_mode & 0o777) == (10001, 10001, 0o700)
             metadata = json.loads(body)
             assert metadata["issuer"] == issuer
             assert "S256" in metadata["code_challenge_methods_supported"]
+            flow = (
+                RefreshFlow(request, metadata, resource["resource"], AUTH, MCP)
+                .establish()
+                .establish_independent()
+                if args.refresh_flow
+                else None
+            )
             status, _, body = request(
                 metadata["registration_endpoint"],
                 "POST",
@@ -490,6 +541,8 @@ assert (s.st_uid, s.st_gid, s.st_mode & 0o777) == (10001, 10001, 0o700)
             # Docker can allocate a new ephemeral host port after a restart.
             port = gateway_port()
             wait_ready()
+            if flow is not None:
+                flow.after_restart()
             for name in (auth, pom):
                 check_processes(name)
                 docker(
@@ -544,16 +597,19 @@ assert (s.st_uid, s.st_gid, s.st_mode & 0o777) == (10001, 10001, 0o700)
                 assert result.returncode == 1, "Read-only storage did not fail closed"
                 assert "Volume initialization failed" in result.stderr
             print("PASS read-only volumes fail before rendering or starting services")
-        except BaseException:
-            # No real secrets used. Avoid logging OAuth redirect/access tokens anyway.
-            for name in names:
-                result = subprocess.run(
-                    ["docker", "logs", "--tail", "100", name],
-                    capture_output=True,
-                    text=True,
+        except BaseException as exc:
+            # Full container logs can contain even synthetic OAuth credentials.
+            print(
+                "Topology validation failed; container logs omitted to protect token material"
+            )
+            if args.refresh_flow:
+                frames = traceback.extract_tb(exc.__traceback__)
+                locations = " -> ".join(
+                    f"{Path(frame.filename).name}:{frame.lineno}" for frame in frames
                 )
-                logs = result.stdout + result.stderr
-                print(f"{name}: {logs}")
+                raise SystemExit(
+                    f"Authenticated topology check failed ({type(exc).__name__}) at {locations}; sensitive exception details suppressed"
+                ) from None
             raise
         finally:
             for name in reversed(names):

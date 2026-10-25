@@ -71,7 +71,7 @@ def check_storage(service, path=DATA):
         if (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (UID, GID, 0o700):
             raise ValueError("Volume is not private service-owned storage")
         names = (
-            ("databroker",)
+            ("databroker", "databroker.refresh-authority")
             if service == "pomerium"
             else ("dex.db", "dex.db-wal", "dex.db-shm", "dex.db-journal")
         )

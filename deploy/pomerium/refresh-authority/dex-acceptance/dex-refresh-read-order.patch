@@ -1,0 +1,94 @@
+diff --git a/server/grants/refresh.go b/server/grants/refresh.go
+index b074390..6671aa7 100644
+--- a/server/grants/refresh.go
++++ b/server/grants/refresh.go
+@@ -108,13 +108,24 @@ func (g *refresh) Authorize(ctx context.Context, req *Request, client storage.Cl
+ 	// upstream provider: use the claims cached in UserIdentity at the last login
+ 	// instead of contacting the connector (which may fail if the upstream token
+ 	// has expired). Otherwise re-read the identity from the connector.
++	// Resolve stored connector data before Rotate enters UpdateRefreshToken's
++	// transaction. Reading through the outer storage handle inside that updater
++	// deadlocks backends with a single connection or a non-reentrant mutex.
++	// Keep the actual connector refresh inside the updater: its current-token
++	// check must succeed before an upstream rotating credential is consumed.
++	var connectorData []byte
++	var connectorDataErr error
++	if userIdent == nil {
++		connectorData, connectorDataErr = g.refreshConnectorData(ctx, refreshToken)
++	}
+ 	freshIdentity := func(ctx context.Context) (connector.Identity, error) {
+ 		if userIdent != nil {
+ 			return tokens.IdentityFromClaims(userIdent.Claims), nil
+ 		}
+-		connectorData, err := g.refreshConnectorData(ctx, refreshToken)
+-		if err != nil {
+-			return connector.Identity{}, err
++		// A reuse/no-refresh path does not need connector data, so surface a
++		// read error only if rotation actually requests a fresh identity.
++		if connectorDataErr != nil {
++			return connector.Identity{}, connectorDataErr
+ 		}
+ 		return g.refreshWithConnector(ctx, conn, connectorData, scopes, tokens.IdentityFromClaims(refreshToken.Claims))
+ 	}
+diff --git a/server/weechat_sqlite_deadlock_test.go b/server/weechat_sqlite_deadlock_test.go
+new file mode 100644
+--- /dev/null
++++ b/server/weechat_sqlite_deadlock_test.go
+@@ -0,0 +1,57 @@
++//go:build weechat_sqlite_acceptance
++
++package server
++
++import (
++	"encoding/json"
++	"io"
++	"net/http"
++	"net/url"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/dexidp/dex/server/internal"
++	"github.com/dexidp/dex/server/tokens"
++	"github.com/dexidp/dex/storage/sql"
++	"github.com/stretchr/testify/require"
++)
++
++// TestWeechatSQLiteSessionsDisabledHTTP isolates Dex without the coordinator.
++// Repeated requests must complete after connector data moves from the legacy
++// token record to the offline session. Before the fix, request two deadlocks.
++func TestWeechatSQLiteSessionsDisabledHTTP(t *testing.T) {
++	db, err := (&sql.SQLite3{File: filepath.Join(t.TempDir(), "dex.db")}).Open(newLogger(t))
++	require.NoError(t, err)
++	server, dex := newTestServer(t, func(c *Config) {
++		c.Storage = db
++		c.SessionConfig = nil
++		c.RefreshTokenPolicy = tokens.NewRefreshStrategy(true, 0, 0, 0, nil)
++	})
++	defer server.Close()
++	server.Client().Timeout = 5 * time.Second
++	mockRefreshTokenTestStorage(t, dex.storage, false)
++	raw, err := internal.Marshal(&internal.RefreshToken{RefreshId: "test", Token: "bar"})
++	require.NoError(t, err)
++	for step := 1; step <= 4; step++ {
++		req, err := http.NewRequest("POST", server.URL+"/token", strings.NewReader(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {raw}}.Encode()))
++		require.NoError(t, err)
++		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
++		req.SetBasicAuth("test", "barfoo")
++		res, err := server.Client().Do(req)
++		require.NoError(t, err, "refresh step %d", step)
++		body, err := io.ReadAll(res.Body)
++		_ = res.Body.Close()
++		require.NoError(t, err)
++		require.Equal(t, 200, res.StatusCode, string(body))
++		var result struct {
++			RefreshToken string `json:"refresh_token"`
++		}
++		require.NoError(t, json.Unmarshal(body, &result))
++		require.NotEmpty(t, result.RefreshToken)
++		require.NotEqual(t, raw, result.RefreshToken)
++		raw = result.RefreshToken
++		t.Logf("real SQLite-backed Dex HTTP rotation %d completed", step)
++	}
++}

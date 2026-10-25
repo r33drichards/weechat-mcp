@@ -144,6 +144,35 @@ class RendererTests(unittest.TestCase):
                 self.assertNotIn("Bearer ", pomerium)
                 self.assertNotIn("unused-token", pomerium)
 
+    def test_isolated_live_routes_preserve_shared_auth_and_distinct_backends(self):
+        env = {
+            **PRIVATE_POMERIUM_ENV,
+            "DIP_MCP_ORIGIN": "https://dip.example.test",
+            "DIP_BACKEND_ORIGIN": "http://dip.railway.internal:8000",
+            "CLAUDE_MCP_ORIGIN": "https://claude.example.test",
+            "CLAUDE_BACKEND_ORIGIN": "http://claude.railway.internal:8000",
+        }
+        rendered = self.render("pomerium", env)["pomerium.yaml"]
+        self.assertEqual(rendered.count("idp_client_id:"), 1)
+        self.assertIn("idp_client_id: pomerium", rendered)
+        self.assertEqual(rendered.count("name: weechat-mcp"), 1)
+        for prefix in ("DIP", "CLAUDE"):
+            self.assertIn("name: " + prefix.lower(), rendered)
+            self.assertIn(env[prefix + "_MCP_ORIGIN"], rendered)
+            self.assertIn(env[prefix + "_BACKEND_ORIGIN"], rendered)
+        self.assertEqual(rendered.count("remove_request_headers: [Authorization]"), 3)
+        self.assertEqual(rendered.count(PRIVATE_POMERIUM_ENV["OWNER_EMAIL"]), 3)
+        for changes in (
+            {"DIP_MCP_ORIGIN": env["MCP_ORIGIN"]},
+            {"CLAUDE_MCP_ORIGIN": env["DIP_MCP_ORIGIN"]},
+            {"CLAUDE_BACKEND_ORIGIN": env["DIP_BACKEND_ORIGIN"]},
+            {"DIP_BACKEND_ORIGIN": ""},
+            {"DIP_MCP_ORIGIN": ""},
+            {"MCP_AUTH_MODE": "bearer"},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.render("pomerium", {**env, **changes})
+
     def test_private_mode_rejects_missing_runtime_and_nonprivate_backends(self):
         for key in ("RAILWAY_ENVIRONMENT_ID", "RAILWAY_SERVICE_ID", "MCP_AUTH_MODE"):
             env = dict(PRIVATE_POMERIUM_ENV)

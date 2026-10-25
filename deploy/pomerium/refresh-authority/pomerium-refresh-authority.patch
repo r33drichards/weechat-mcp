@@ -1,0 +1,1612 @@
+diff --git a/cmd/pomerium/main.go b/cmd/pomerium/main.go
+index d60a350..8ba1bdc 100644
+--- a/cmd/pomerium/main.go
++++ b/cmd/pomerium/main.go
+@@ -20,6 +20,8 @@ import (
+ 	"github.com/pomerium/pomerium/pkg/contextutil"
+ 	"github.com/pomerium/pomerium/pkg/envoy/files"
+ 	"github.com/pomerium/pomerium/pkg/health"
++	"github.com/pomerium/pomerium/pkg/identity/oidc"
++	"github.com/pomerium/pomerium/pkg/identity/refreshcoord"
+ 	"github.com/pomerium/pomerium/pkg/telemetry/trace"
+ )
+ 
+@@ -45,6 +47,9 @@ func main() {
+ 	}()
+ 	runFn := run
+ 	if zero_cmd.IsManagedMode(configFile) {
++		if os.Getenv("WEECHAT_REFRESH_AUTHORITY_DIR") != "" {
++			log.Fatal().Msg("local refresh authority does not support managed mode")
++		}
+ 		runFn = zero_cmd.Run
+ 	}
+ 	root.RunE = func(_ *cobra.Command, _ []string) error {
+@@ -65,6 +70,21 @@ func run(ctx context.Context, configFile string) error {
+ 		return err
+ 	}
+ 
++	dir, err := src.GetConfig().Options.LocalRefreshAuthorityDirectory()
++	if err != nil {
++		return err
++	}
++	if dir != "" {
++		authority, err := refreshcoord.Open(dir)
++		if err != nil {
++			return err
++		}
++		// Do not release this lock until OS process exit, including shutdown paths.
++		// Background service goroutines may still be finishing requests after Run.
++		if err := oidc.SetLocalRefreshAuthority(authority); err != nil {
++			return err
++		}
++	}
+ 	return pomerium.Run(ctx, src)
+ }
+ 
+diff --git a/config/options.go b/config/options.go
+index 6390bcf..1305f6b 100644
+--- a/config/options.go
++++ b/config/options.go
+@@ -601,6 +601,9 @@ func bindEnvsRecursive(t reflect.Type, v *viper.Viper, keyPrefix, envPrefix stri
+ 
+ // Validate ensures the Options fields are valid, and hydrated.
+ func (o *Options) Validate() error {
++	if _, err := o.LocalRefreshAuthorityDirectory(); err != nil {
++		return err
++	}
+ 	ctx := context.TODO()
+ 	if !IsValidService(o.Services) {
+ 		return fmt.Errorf("config: %s is an invalid service type", o.Services)
+diff --git a/pkg/identity/oidc/oidc.go b/pkg/identity/oidc/oidc.go
+index 661b5bc..7fb3369 100644
+--- a/pkg/identity/oidc/oidc.go
++++ b/pkg/identity/oidc/oidc.go
+@@ -9,6 +9,7 @@ import (
+ 	"fmt"
+ 	"net/http"
+ 	"net/url"
++	"os"
+ 	"slices"
+ 	"strings"
+ 	"sync"
+@@ -25,6 +26,7 @@ import (
+ 	"github.com/pomerium/pomerium/pkg/identity/oauth"
+ 	"github.com/pomerium/pomerium/pkg/identity/oidc/internal"
+ 	"github.com/pomerium/pomerium/pkg/identity/pkce"
++	"github.com/pomerium/pomerium/pkg/identity/refreshcoord"
+ 	"github.com/pomerium/pomerium/pkg/telemetry/trace"
+ )
+ 
+@@ -41,6 +43,9 @@ var defaultAuthCodeOptions = []oauth2.AuthCodeOption{}
+ type Provider struct {
+ 	cfg *config
+ 
++	refreshAuthority *refreshcoord.Coordinator
++	refreshIssuer    string
++
+ 	// RevocationURL is the location of the OAuth 2.0 token revocation endpoint.
+ 	// https://tools.ietf.org/html/rfc7009
+ 	RevocationURL string `json:"revocation_endpoint,omitempty"`
+@@ -72,6 +77,14 @@ func New(ctx context.Context, o *oauth.Options, options ...Option) (*Provider, e
+ 	}
+ 
+ 	p := new(Provider)
++	p.refreshAuthority = localRefreshAuthority.Load()
++	p.refreshIssuer = o.ProviderURL
++	if os.Getenv("WEECHAT_REFRESH_AUTHORITY_DIR") != "" && p.refreshAuthority == nil {
++		return nil, fmt.Errorf("local refresh authority was not initialized")
++	}
++	if p.refreshAuthority != nil && (o.ProviderName != Name || o.ClientSecret != "") {
++		return nil, fmt.Errorf("local refresh authority requires generic OIDC with a public client")
++	}
+ 	if len(o.Scopes) == 0 {
+ 		o.Scopes = defaultScopes
+ 	}
+@@ -188,6 +201,9 @@ func (p *Provider) authenticate(ctx context.Context, v identity.State, exchange
+ 		return nil, fmt.Errorf("identity/oidc: couldn't update user info %w", err)
+ 	}
+ 
++	if p.refreshAuthority != nil && oauth2Token.RefreshToken != "" {
++		return p.refreshAuthority.Register(p.refreshBinding(oa), oauth2Token)
++	}
+ 	return oauth2Token, nil
+ }
+ 
+@@ -248,7 +264,29 @@ func (p *Provider) Refresh(ctx context.Context, t *oauth2.Token, v identity.Stat
+ 		return nil, err
+ 	}
+ 
+-	newToken, err := Refresh(ctx, oa, t)
++	var newToken *oauth2.Token
++	if p.refreshAuthority != nil {
++		// Public Dex clients use form parameters. Disable oauth2 auth-style probing,
++		// which can otherwise retry an ambiguous refresh request with a spent token.
++		oaCopy := *oa
++		oaCopy.Endpoint.AuthStyle = oauth2.AuthStyleInParams
++		newToken, err = p.refreshAuthority.Refresh(ctx, p.refreshBinding(oa), t,
++			func(ctx context.Context, current *oauth2.Token) (*oauth2.Token, error) {
++				next, err := Refresh(ctx, &oaCopy, current)
++				if err != nil {
++					return nil, err
++				}
++				// oauth2 silently copies the old bearer when a response omits this
++				// field. Dex rotation requires an explicit successor, never that fallback.
++				successor, ok := next.Extra("refresh_token").(string)
++				if !ok || successor == "" || successor != next.RefreshToken {
++					return nil, fmt.Errorf("rotating provider omitted refresh successor")
++				}
++				return next, nil
++			})
++	} else {
++		newToken, err = Refresh(ctx, oa, t)
++	}
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/pkg/identity/oidc/refresh.go b/pkg/identity/oidc/refresh.go
+index a2c1a21..761cb64 100644
+--- a/pkg/identity/oidc/refresh.go
++++ b/pkg/identity/oidc/refresh.go
+@@ -4,6 +4,7 @@ import (
+ 	"context"
+ 	"fmt"
+ 
++	"github.com/pomerium/pomerium/pkg/identity/refreshcoord"
+ 	"golang.org/x/oauth2"
+ )
+ 
+@@ -14,6 +15,10 @@ func Refresh(ctx context.Context, cfg *oauth2.Config, t *oauth2.Token) (*oauth2.
+ 		return nil, ErrMissingRefreshToken
+ 	}
+ 
++	if refreshcoord.IsReference(t.RefreshToken) {
++		return nil, fmt.Errorf("local refresh authority required; reauthenticate")
++	}
++
+ 	// Note: the TokenSource returned by oauth2.Config has its own threshold
+ 	// for determining when to attempt a refresh. In order to force a refresh
+ 	// we can remove the current AccessToken.
+diff --git a/config/local_refresh_authority.go b/config/local_refresh_authority.go
+new file mode 100644
+index 0000000..36fcba0
+--- /dev/null
++++ b/config/local_refresh_authority.go
+@@ -0,0 +1,36 @@
++package config
++
++import (
++	"fmt"
++	"net/url"
++	"os"
++	"path/filepath"
++)
++
++// LocalRefreshAuthorityDirectory enables a deployment-specific repair, limited
++// to one all-in-one gateway and its persistent local databroker volume. Keeping
++// the authority adjacent to the database prevents replicas sharing a database
++// from accidentally selecting different lock files. Separate-volume replicas,
++// network filesystems and old writer versions are not supported.
++func (o *Options) LocalRefreshAuthorityDirectory() (string, error) {
++	dir := os.Getenv("WEECHAT_REFRESH_AUTHORITY_DIR")
++	if dir == "" {
++		return "", nil
++	}
++	if !IsAll(o.Services) || o.Provider != "oidc" || o.ClientSecret != "" || o.ClientSecretFile != "" ||
++		o.DataBroker.StorageType != StorageFileName || o.DataBroker.StorageConnectionStringFile != "" || len(o.DataBroker.ClusterNodes) != 0 ||
++		o.DataBroker.ClusterNodeID.IsValid() || o.DataBroker.ClusterLeaderID.IsValid() {
++		return "", fmt.Errorf("local refresh authority requires all-in-one public OIDC and non-clustered file storage")
++	}
++	dsn, err := o.DataBroker.GetStorageConnectionString()
++	if err != nil {
++		return "", fmt.Errorf("local refresh authority: cannot read storage configuration")
++	}
++	u, err := url.Parse(dsn)
++	if err != nil || u.Scheme != "file" || u.Host != "" || u.RawQuery != "" || u.Fragment != "" ||
++		!filepath.IsAbs(u.Path) || filepath.Clean(u.Path) != u.Path || u.Path == "/" ||
++		dir != u.Path+".refresh-authority" {
++		return "", fmt.Errorf("local refresh authority directory must be the absolute file databroker path plus .refresh-authority")
++	}
++	return dir, nil
++}
+diff --git a/config/local_refresh_authority_test.go b/config/local_refresh_authority_test.go
+new file mode 100644
+index 0000000..4357fa6
+--- /dev/null
++++ b/config/local_refresh_authority_test.go
+@@ -0,0 +1,42 @@
++package config
++
++import (
++	"github.com/stretchr/testify/require"
++	"path/filepath"
++	"testing"
++)
++
++func TestLocalRefreshAuthorityDirectory(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "databroker")
++	t.Setenv("WEECHAT_REFRESH_AUTHORITY_DIR", path+".refresh-authority")
++	valid := func() *Options {
++		return &Options{Services: "all", Provider: "oidc", DataBroker: DataBrokerOptions{StorageType: StorageFileName, StorageConnectionString: "file://" + path}}
++	}
++	o := valid()
++	dir, err := o.LocalRefreshAuthorityDirectory()
++	require.NoError(t, err)
++	require.Equal(t, path+".refresh-authority", dir)
++	for name, change := range map[string]func(*Options){
++		"split services":     func(o *Options) { o.Services = "proxy" },
++		"hosted provider":    func(o *Options) { o.Provider = "pomerium" },
++		"client secret":      func(o *Options) { o.ClientSecret = "synthetic" },
++		"client secret file": func(o *Options) { o.ClientSecretFile = "/not/read" },
++		"DSN file":           func(o *Options) { o.DataBroker.StorageConnectionStringFile = "/never/read" },
++		"postgres":           func(o *Options) { o.DataBroker.StorageType = StoragePostgresName },
++		"other database":     func(o *Options) { o.DataBroker.StorageConnectionString = "file:///other" },
++		"memory":             func(o *Options) { o.DataBroker.StorageConnectionString = "memory://" },
++		"relative":           func(o *Options) { o.DataBroker.StorageConnectionString = "file:relative" },
++		"remote host":        func(o *Options) { o.DataBroker.StorageConnectionString = "file://other" + path },
++		"query":              func(o *Options) { o.DataBroker.StorageConnectionString += "?x=1" },
++	} {
++		t.Run(name, func(t *testing.T) {
++			o := valid()
++			change(o)
++			_, err := o.LocalRefreshAuthorityDirectory()
++			require.Error(t, err)
++		})
++	}
++	t.Setenv("WEECHAT_REFRESH_AUTHORITY_DIR", "")
++	_, err = (&Options{}).LocalRefreshAuthorityDirectory()
++	require.NoError(t, err)
++}
+diff --git a/internal/mcp/weechat_authority_regression_test.go b/internal/mcp/weechat_authority_regression_test.go
+new file mode 100644
+index 0000000..7011b73
+--- /dev/null
++++ b/internal/mcp/weechat_authority_regression_test.go
+@@ -0,0 +1,144 @@
++package mcp
++
++import (
++	"context"
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"github.com/pomerium/pomerium/pkg/cryptutil"
++	"github.com/pomerium/pomerium/pkg/grpc/session"
++	"github.com/pomerium/pomerium/pkg/identity"
++	identitystate "github.com/pomerium/pomerium/pkg/identity/identity"
++	"github.com/pomerium/pomerium/pkg/identity/manager"
++	"github.com/pomerium/pomerium/pkg/identity/refreshcoord"
++	"github.com/stretchr/testify/require"
++	"golang.org/x/oauth2"
++	"google.golang.org/protobuf/types/known/timestamppb"
++)
++
++func TestWeechatAuthorityBackgroundRefreshPreservesMCPGrant(t *testing.T) {
++	for _, grace := range []time.Duration{0, 5 * time.Second} {
++		t.Run(grace.String(), func(t *testing.T) {
++			ctx, cancel := context.WithCancel(context.Background())
++			defer cancel()
++			store := setupTestDatabroker(ctx, t)
++			cipher, err := cryptutil.NewAEADCipher(cryptutil.NewKey())
++			require.NoError(t, err)
++			rotating := &weechatRotatingIdP{current: "synthetic-original", now: time.Now(), grace: grace}
++			authority, err := refreshcoord.Open(filepath.Join(t.TempDir(), "authority"))
++			require.NoError(t, err)
++			defer authority.Close()
++			initial, err := authority.Register("synthetic-binding", &oauth2.Token{AccessToken: "synthetic-access", RefreshToken: "synthetic-original"})
++			require.NoError(t, err)
++			auth := &mockAuthenticator{refreshFunc: func(ctx context.Context, token *oauth2.Token, v identitystate.State) (*oauth2.Token, error) {
++				result, err := authority.Refresh(ctx, "synthetic-binding", token, func(ctx context.Context, current *oauth2.Token) (*oauth2.Token, error) {
++					return rotating.refresh(ctx, current, v)
++				})
++				if err == nil {
++					err = json.Unmarshal([]byte(`{"sub":"synthetic-user","email":"fresh@example.invalid","groups":["fresh-group"]}`), v)
++				}
++				return result, err
++			}}
++			getAuth := func(context.Context, string) (identity.Authenticator, error) { return auth, nil }
++			h := &Handler{cipher: cipher, storage: store, sessionExpiry: time.Hour, getAuthenticator: getAuth}
++			browser := session.Create("synthetic-idp", "synthetic-browser", "synthetic-user", time.Now(), 24*time.Hour)
++			browser.OauthToken = &session.OAuthToken{RefreshToken: initial.RefreshToken, ExpiresAt: timestamppb.New(time.Now().Add(-time.Minute))}
++			_, err = store.PutSession(ctx, browser)
++			require.NoError(t, err)
++			client, refresh := weechatIssueGrant(t, h, store, browser)
++			code, err := h.DecryptRefreshToken(refresh, client)
++			require.NoError(t, err)
++			mgr := manager.New(manager.WithDataBrokerClient(store.client()), manager.WithGetAuthenticator(getAuth), manager.WithSessionRefreshCoolOffDuration(time.Millisecond), manager.WithSessionRefreshGracePeriod(0))
++			finished := make(chan error, 1)
++			go func() { finished <- mgr.RunLeased(ctx) }()
++			defer func() {
++				cancel()
++				select {
++				case <-finished:
++				case <-time.After(3 * time.Second):
++					t.Error("manager did not stop")
++				}
++			}()
++			require.Eventually(t, func() bool {
++				current, _, e := store.GetSession(ctx, browser.Id)
++				return e == nil && current.GetOauthToken().GetAccessToken() == "synthetic-access" && current.GetOauthToken().GetRefreshToken() == initial.RefreshToken
++			}, 5*time.Second, 10*time.Millisecond, "real background manager must rotate stored session token")
++			grant, err := store.GetMCPRefreshToken(ctx, code.Id)
++			require.NoError(t, err)
++			require.Equal(t, initial.RefreshToken, grant.UpstreamRefreshToken, "grant and manager retain the same stable lineage reference")
++			if grace > 0 {
++				rotating.advance(grace + time.Second)
++			}
++			w := weechatTokenPost(t, h, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {client}})
++			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
++			requireFreshWeechatSession(t, ctx, h, store, w, initial.RefreshToken)
++		})
++	}
++}
++
++func TestWeechatAuthorityMCPClientsShareOneReference(t *testing.T) {
++	ctx := context.Background()
++	store := setupTestDatabroker(ctx, t)
++	cipher, err := cryptutil.NewAEADCipher(cryptutil.NewKey())
++	require.NoError(t, err)
++	rotating := &weechatRotatingIdP{current: "synthetic-original", now: time.Now()}
++	authority, err := refreshcoord.Open(filepath.Join(t.TempDir(), "authority"))
++	require.NoError(t, err)
++	defer authority.Close()
++	initial, err := authority.Register("synthetic-binding", &oauth2.Token{AccessToken: "synthetic-access", RefreshToken: "synthetic-original"})
++	require.NoError(t, err)
++	auth := &mockAuthenticator{refreshFunc: func(ctx context.Context, token *oauth2.Token, v identitystate.State) (*oauth2.Token, error) {
++		result, err := authority.Refresh(ctx, "synthetic-binding", token, func(ctx context.Context, current *oauth2.Token) (*oauth2.Token, error) {
++			return rotating.refresh(ctx, current, v)
++		})
++		if err == nil {
++			err = json.Unmarshal([]byte(`{"sub":"synthetic-user","email":"fresh@example.invalid","groups":["fresh-group"]}`), v)
++		}
++		return result, err
++	}}
++	h := &Handler{cipher: cipher, storage: store, sessionExpiry: time.Hour, getAuthenticator: func(context.Context, string) (identity.Authenticator, error) { return auth, nil }}
++	browser := session.Create("synthetic-idp", "synthetic-browser", "synthetic-user", time.Now(), 24*time.Hour)
++	browser.OauthToken = &session.OAuthToken{RefreshToken: initial.RefreshToken}
++	_, err = store.PutSession(ctx, browser)
++	require.NoError(t, err)
++	clientA, tokenA := weechatIssueGrant(t, h, store, browser)
++	clientB, tokenB := weechatIssueGrant(t, h, store, browser)
++
++	for round := 0; round < 4; round++ {
++		rotating.advance(10 * time.Second)
++		a := weechatTokenPost(t, h, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {tokenA}, "client_id": {clientA}})
++		require.Equal(t, http.StatusOK, a.Code, a.Body.String())
++		rotating.advance(10 * time.Second)
++		b := weechatTokenPost(t, h, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {tokenB}, "client_id": {clientB}})
++		require.Equal(t, http.StatusOK, b.Code, b.Body.String())
++		requireFreshWeechatSession(t, ctx, h, store, a, initial.RefreshToken)
++		requireFreshWeechatSession(t, ctx, h, store, b, initial.RefreshToken)
++		var nextA, nextB struct {
++			RefreshToken string `json:"refresh_token"`
++		}
++		require.NoError(t, json.Unmarshal(a.Body.Bytes(), &nextA))
++		require.NoError(t, json.Unmarshal(b.Body.Bytes(), &nextB))
++		tokenA, tokenB = nextA.RefreshToken, nextB.RefreshToken
++	}
++
++}
++
++func requireFreshWeechatSession(t *testing.T, ctx context.Context, h *Handler, store *Storage, w *httptest.ResponseRecorder, ref string) {
++	t.Helper()
++	var response struct {
++		AccessToken string `json:"access_token"`
++	}
++	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
++	id, err := h.GetSessionIDFromAccessToken(response.AccessToken)
++	require.NoError(t, err)
++	s, _, err := store.GetSession(ctx, id)
++	require.NoError(t, err)
++	require.Equal(t, ref, s.GetOauthToken().GetRefreshToken())
++	require.Equal(t, "fresh@example.invalid", s.Claims["email"].Values[0].GetStringValue())
++	require.Equal(t, "fresh-group", s.Claims["groups"].Values[0].GetStringValue())
++}
+diff --git a/internal/mcp/weechat_rotation_regression_test.go b/internal/mcp/weechat_rotation_regression_test.go
+new file mode 100644
+index 0000000..8a269d7
+--- /dev/null
++++ b/internal/mcp/weechat_rotation_regression_test.go
+@@ -0,0 +1,156 @@
++package mcp
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	oauth21proto "github.com/pomerium/pomerium/internal/oauth21/gen"
++	rfc7591v1 "github.com/pomerium/pomerium/internal/rfc7591"
++	"github.com/pomerium/pomerium/pkg/cryptutil"
++	"github.com/pomerium/pomerium/pkg/grpc/session"
++	"github.com/pomerium/pomerium/pkg/identity"
++	identitystate "github.com/pomerium/pomerium/pkg/identity/identity"
++	"github.com/pomerium/pomerium/pkg/identity/manager"
++	"github.com/stretchr/testify/require"
++	"golang.org/x/oauth2"
++	"google.golang.org/protobuf/types/known/timestamppb"
++)
++
++// This fake implements strict rotating-IdP semantics independently verified against
++// pinned Dex in its real RefreshStore tests. Pomerium handler/manager/storage are real.
++type weechatRotatingIdP struct {
++	mu                sync.Mutex
++	current, previous string
++	now, rotated      time.Time
++	grace             time.Duration
++	count             int
++}
++
++func (a *weechatRotatingIdP) refresh(_ context.Context, old *oauth2.Token, _ identitystate.State) (*oauth2.Token, error) {
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	within := a.grace > 0 && !a.now.After(a.rotated.Add(a.grace))
++	if old.RefreshToken != a.current && !(within && old.RefreshToken == a.previous) {
++		return nil, errors.New("synthetic rotating IdP: refresh token claimed twice")
++	}
++	if !within {
++		a.count++
++		a.previous = a.current
++		a.current = fmt.Sprintf("synthetic-refresh-%d", a.count)
++		a.rotated = a.now
++	}
++	return &oauth2.Token{AccessToken: "synthetic-access", RefreshToken: a.current, TokenType: "Bearer", Expiry: time.Now().Add(time.Hour)}, nil
++}
++func (a *weechatRotatingIdP) advance(d time.Duration) {
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	a.now = a.now.Add(d)
++}
++
++func weechatTokenPost(t *testing.T, h *Handler, form url.Values) *httptest.ResponseRecorder {
++	t.Helper()
++	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
++	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
++	w := httptest.NewRecorder()
++	h.Token(w, req)
++	return w
++}
++
++func weechatIssueGrant(t *testing.T, h *Handler, store *Storage, browser *session.Session) (string, string) {
++	t.Helper()
++	ctx := context.Background()
++	client, err := store.RegisterClient(ctx, &rfc7591v1.ClientRegistration{ResponseMetadata: &rfc7591v1.Metadata{TokenEndpointAuthMethod: new("none")}})
++	require.NoError(t, err)
++	verifier := "synthetic-pkce-code-verifier-long-enough-for-authorization"
++	id, err := store.CreateAuthorizationRequest(ctx, &oauth21proto.AuthorizationRequest{
++		ClientId: client, SessionId: browser.Id, CodeChallenge: new(computeS256Challenge(verifier)), CodeChallengeMethod: new("S256"), Scopes: []string{"openid"},
++	})
++	require.NoError(t, err)
++	code, err := CreateCode(CodeTypeAuthorization, id, time.Now().Add(time.Hour), client, h.cipher)
++	require.NoError(t, err)
++	w := weechatTokenPost(t, h, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "client_id": {client}, "code_verifier": {verifier}})
++	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
++	var result struct {
++		Refresh string `json:"refresh_token"`
++	}
++	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
++	require.NotEmpty(t, result.Refresh)
++	return client, result.Refresh
++}
++
++func TestWeechatRealBackgroundRefreshInvalidatesMCPGrant(t *testing.T) {
++	for _, grace := range []time.Duration{0, 5 * time.Second} {
++		t.Run(grace.String(), func(t *testing.T) {
++			ctx, cancel := context.WithCancel(context.Background())
++			defer cancel()
++			store := setupTestDatabroker(ctx, t)
++			cipher, err := cryptutil.NewAEADCipher(cryptutil.NewKey())
++			require.NoError(t, err)
++			rotating := &weechatRotatingIdP{current: "synthetic-original", now: time.Now(), grace: grace}
++			auth := &mockAuthenticator{refreshFunc: rotating.refresh}
++			getAuth := func(context.Context, string) (identity.Authenticator, error) { return auth, nil }
++			h := &Handler{cipher: cipher, storage: store, sessionExpiry: time.Hour, getAuthenticator: getAuth}
++			browser := session.Create("synthetic-idp", "synthetic-browser", "synthetic-user", time.Now(), 24*time.Hour)
++			browser.OauthToken = &session.OAuthToken{RefreshToken: "synthetic-original", ExpiresAt: timestamppb.New(time.Now().Add(-time.Minute))}
++			_, err = store.PutSession(ctx, browser)
++			require.NoError(t, err)
++			client, refresh := weechatIssueGrant(t, h, store, browser)
++			code, err := h.DecryptRefreshToken(refresh, client)
++			require.NoError(t, err)
++			mgr := manager.New(manager.WithDataBrokerClient(store.client()), manager.WithGetAuthenticator(getAuth), manager.WithSessionRefreshCoolOffDuration(time.Millisecond), manager.WithSessionRefreshGracePeriod(0))
++			finished := make(chan error, 1)
++			go func() { finished <- mgr.RunLeased(ctx) }()
++			defer func() {
++				cancel()
++				select {
++				case <-finished:
++				case <-time.After(3 * time.Second):
++					t.Error("manager did not stop")
++				}
++			}()
++			require.Eventually(t, func() bool {
++				current, _, e := store.GetSession(ctx, browser.Id)
++				return e == nil && current.GetOauthToken().GetRefreshToken() == "synthetic-refresh-1"
++			}, 5*time.Second, 10*time.Millisecond, "real background manager must rotate stored session token")
++			grant, err := store.GetMCPRefreshToken(ctx, code.Id)
++			require.NoError(t, err)
++			require.Equal(t, "synthetic-original", grant.UpstreamRefreshToken, "real handler grant copy was not updated by real manager")
++			if grace > 0 {
++				rotating.advance(grace + time.Second)
++			}
++			w := weechatTokenPost(t, h, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {client}})
++			require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
++			require.Contains(t, w.Body.String(), "invalid_grant")
++		})
++	}
++}
++
++func TestWeechatRealMCPClientsShareOneUpstreamToken(t *testing.T) {
++	ctx := context.Background()
++	store := setupTestDatabroker(ctx, t)
++	cipher, err := cryptutil.NewAEADCipher(cryptutil.NewKey())
++	require.NoError(t, err)
++	rotating := &weechatRotatingIdP{current: "synthetic-original", now: time.Now()}
++	auth := &mockAuthenticator{refreshFunc: rotating.refresh}
++	h := &Handler{cipher: cipher, storage: store, sessionExpiry: time.Hour, getAuthenticator: func(context.Context, string) (identity.Authenticator, error) { return auth, nil }}
++	browser := session.Create("synthetic-idp", "synthetic-browser", "synthetic-user", time.Now(), 24*time.Hour)
++	browser.OauthToken = &session.OAuthToken{RefreshToken: "synthetic-original"}
++	_, err = store.PutSession(ctx, browser)
++	require.NoError(t, err)
++	clientA, tokenA := weechatIssueGrant(t, h, store, browser)
++	clientB, tokenB := weechatIssueGrant(t, h, store, browser)
++	a := weechatTokenPost(t, h, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {tokenA}, "client_id": {clientA}})
++	require.Equal(t, http.StatusOK, a.Code, a.Body.String())
++	b := weechatTokenPost(t, h, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {tokenB}, "client_id": {clientB}})
++	require.Equal(t, http.StatusBadRequest, b.Code, b.Body.String())
++	require.Contains(t, b.Body.String(), "invalid_grant")
++}
+diff --git a/pkg/identity/oidc/local_refresh_authority.go b/pkg/identity/oidc/local_refresh_authority.go
+new file mode 100644
+index 0000000..7659b9d
+--- /dev/null
++++ b/pkg/identity/oidc/local_refresh_authority.go
+@@ -0,0 +1,29 @@
++package oidc
++
++import (
++	"encoding/json"
++	"fmt"
++	"sync/atomic"
++
++	"github.com/pomerium/pomerium/pkg/identity/refreshcoord"
++	"golang.org/x/oauth2"
++)
++
++// The pointer is installed once before services start, and is deliberately not
++// tied to an authenticator, handler, or reloadable configuration's lifetime.
++var localRefreshAuthority atomic.Pointer[refreshcoord.Coordinator]
++
++// SetLocalRefreshAuthority installs the process-lifetime authority. It must stay
++// open until the process exits. It cannot be replaced or disabled on reload.
++func SetLocalRefreshAuthority(c *refreshcoord.Coordinator) error {
++	if c == nil || !localRefreshAuthority.CompareAndSwap(nil, c) {
++		return fmt.Errorf("local refresh authority already configured or nil")
++	}
++	return nil
++}
++
++func (p *Provider) refreshBinding(oa *oauth2.Config) string {
++	// Structured encoding prevents ambiguous concatenation. No secrets are used.
++	b, _ := json.Marshal([]string{p.refreshIssuer, oa.Endpoint.TokenURL, oa.ClientID})
++	return string(b)
++}
+diff --git a/pkg/identity/oidc/local_refresh_authority_test.go b/pkg/identity/oidc/local_refresh_authority_test.go
+new file mode 100644
+index 0000000..a02cd46
+--- /dev/null
++++ b/pkg/identity/oidc/local_refresh_authority_test.go
+@@ -0,0 +1,227 @@
++package oidc
++
++import (
++	"encoding/base64"
++	"encoding/json"
++	"fmt"
++	"net/http"
++	"net/http/httptest"
++	"path/filepath"
++	"sync"
++	"testing"
++	"time"
++
++	gooidc "github.com/coreos/go-oidc/v3/oidc"
++	"github.com/stretchr/testify/require"
++	"golang.org/x/oauth2"
++
++	"github.com/pomerium/pomerium/pkg/identity/refreshcoord"
++)
++
++type localRefreshClaims struct{ Raw string }
++
++func (c *localRefreshClaims) SetRawIDToken(raw string) { c.Raw = raw }
++
++func testLocalRefreshProvider(c *refreshcoord.Coordinator, endpoint, issuer, client string) *Provider {
++	oa := &oauth2.Config{ClientID: client, Endpoint: oauth2.Endpoint{TokenURL: endpoint}}
++	return &Provider{refreshAuthority: c, refreshIssuer: issuer, cfg: getConfig(
++		WithGetProvider(func() (*gooidc.Provider, error) { return nil, nil }),
++		WithGetOauthConfig(func(*gooidc.Provider) *oauth2.Config { return oa }),
++		WithGetVerifier(func(*gooidc.Provider) *gooidc.IDTokenVerifier {
++			return gooidc.NewVerifier(issuer, nil, &gooidc.Config{ClientID: client})
++		}),
++	)}
++}
++func testLocalRefreshCoordinator(t *testing.T) *refreshcoord.Coordinator {
++	t.Helper()
++	c, err := refreshcoord.Open(filepath.Join(t.TempDir(), "authority"))
++	require.NoError(t, err)
++	t.Cleanup(func() { require.NoError(t, c.Close()) })
++	return c
++}
++func registerLocalRefresh(t *testing.T, p *Provider) *oauth2.Token {
++	t.Helper()
++	oa, err := p.GetOauthConfig()
++	require.NoError(t, err)
++	token, err := p.refreshAuthority.Register(p.refreshBinding(oa), &oauth2.Token{AccessToken: "initial-access", RefreshToken: "upstream-0"})
++	require.NoError(t, err)
++	return token
++}
++
++func TestLocalRefreshAuthorityConcurrentCopiesAndProviderReload(t *testing.T) {
++	var mu sync.Mutex
++	current := 0
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		mu.Lock()
++		defer mu.Unlock()
++		if r.FormValue("refresh_token") != fmt.Sprintf("upstream-%d", current) {
++			http.Error(w, `{"error":"invalid_grant"}`, http.StatusBadRequest)
++			return
++		}
++		if r.FormValue("client_id") != "public-client" || r.Header.Get("Authorization") != "" {
++			http.Error(w, "wrong client authentication", http.StatusBadRequest)
++			return
++		}
++		current++
++		w.Header().Set("Content-Type", "application/json")
++		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": fmt.Sprintf("access-%d", current), "refresh_token": fmt.Sprintf("upstream-%d", current), "token_type": "Bearer", "expires_in": 3600, "id_token": "raw-id-token"})
++	}))
++	defer server.Close()
++	c := testLocalRefreshCoordinator(t)
++	p := testLocalRefreshProvider(c, server.URL, "issuer", "public-client")
++	original := registerLocalRefresh(t, p)
++	// A replacement provider models a config reload while old requests are live.
++	replacement := testLocalRefreshProvider(c, server.URL, "issuer", "public-client")
++	const count = 12
++	var wg sync.WaitGroup
++	errs := make(chan error, count)
++	for i := range count {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			provider := p
++			if i%2 == 1 {
++				provider = replacement
++			}
++			copy := *original
++			claims := new(localRefreshClaims)
++			next, err := provider.Refresh(t.Context(), &copy, claims)
++			if err == nil && (next.RefreshToken != original.RefreshToken || claims.Raw != "raw-id-token") {
++				err = fmt.Errorf("reference or ID token not preserved")
++			}
++			errs <- err
++		}()
++	}
++	wg.Wait()
++	close(errs)
++	for err := range errs {
++		require.NoError(t, err)
++	}
++	mu.Lock()
++	defer mu.Unlock()
++	require.Equal(t, count, current)
++	require.Equal(t, "initial-access", original.AccessToken)
++}
++
++func TestLocalRefreshAuthorityRejectsUnownedTokens(t *testing.T) {
++	requests := 0
++	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
++	defer server.Close()
++	c := testLocalRefreshCoordinator(t)
++	p := testLocalRefreshProvider(c, server.URL, "issuer", "public-client")
++	original := registerLocalRefresh(t, p)
++	cases := []struct {
++		name     string
++		provider *Provider
++		token    *oauth2.Token
++	}{
++		{"nil", p, nil},
++		{"empty", p, &oauth2.Token{}},
++		{"legacy raw", p, &oauth2.Token{RefreshToken: "upstream-0"}},
++		{"different issuer", testLocalRefreshProvider(c, server.URL, "other-issuer", "public-client"), original},
++		{"different client", testLocalRefreshProvider(c, server.URL, "issuer", "other-client"), original},
++		{"different endpoint", testLocalRefreshProvider(c, server.URL+"/other", "issuer", "public-client"), original},
++		{"authority unavailable", testLocalRefreshProvider(nil, server.URL, "issuer", "public-client"), original},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			_, err := tc.provider.Refresh(t.Context(), tc.token, new(localRefreshClaims))
++			require.Error(t, err)
++		})
++	}
++	require.Zero(t, requests, "rejected credentials must never reach the token endpoint")
++}
++
++func TestLocalRefreshAuthorityAmbiguousFailureDoesNotProbeOrRetry(t *testing.T) {
++	requests := 0
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		requests++
++		// The IdP consumed the refresh token, but its response was lost or failed.
++		http.Error(w, "failed after consuming token", http.StatusInternalServerError)
++	}))
++	defer server.Close()
++	c := testLocalRefreshCoordinator(t)
++	p := testLocalRefreshProvider(c, server.URL, "issuer", "public-client")
++	original := registerLocalRefresh(t, p)
++	for range 2 {
++		_, err := p.Refresh(t.Context(), original, new(localRefreshClaims))
++		require.Error(t, err)
++	}
++	require.Equal(t, 1, requests, "neither OAuth auth-style probing nor subsequent callers may replay the token")
++}
++
++func TestLocalRefreshAuthorityAuthenticateInitializesLineage(t *testing.T) {
++	var server *httptest.Server
++	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set("Content-Type", "application/json")
++		switch r.URL.Path {
++		case "/.well-known/openid-configuration":
++			_ = json.NewEncoder(w).Encode(map[string]string{"issuer": server.URL, "authorization_endpoint": server.URL + "/authorize", "token_endpoint": server.URL + "/token", "jwks_uri": server.URL + "/keys", "userinfo_endpoint": server.URL + "/userinfo"})
++		case "/userinfo":
++			if r.Header.Get("Authorization") != "Bearer initial-access" {
++				http.Error(w, "bad bearer", 401)
++				return
++			}
++			_, _ = w.Write([]byte(`{"sub":"user-id"}`))
++		default:
++			http.NotFound(w, r)
++		}
++	}))
++	defer server.Close()
++	c := testLocalRefreshCoordinator(t)
++	oa := &oauth2.Config{ClientID: "public-client", Endpoint: oauth2.Endpoint{TokenURL: server.URL + "/token"}}
++	p := &Provider{refreshAuthority: c, refreshIssuer: server.URL, cfg: getConfig(
++		WithGetProvider(func() (*gooidc.Provider, error) { return gooidc.NewProvider(t.Context(), server.URL) }),
++		WithGetOauthConfig(func(*gooidc.Provider) *oauth2.Config { return oa }),
++		// This fixture tests reference registration, not JWT cryptography.
++		WithGetVerifier(func(*gooidc.Provider) *gooidc.IDTokenVerifier {
++			return gooidc.NewVerifier(server.URL, nil, &gooidc.Config{ClientID: oa.ClientID, InsecureSkipSignatureCheck: true})
++		}),
++	)}
++	payload, err := json.Marshal(map[string]any{"iss": server.URL, "sub": "user-id", "aud": oa.ClientID, "exp": time.Now().Add(time.Hour).Unix()})
++	require.NoError(t, err)
++	rawID := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`)) + "." + base64.RawURLEncoding.EncodeToString(payload) + "."
++	original := (&oauth2.Token{AccessToken: "initial-access", RefreshToken: "upstream-0"}).WithExtra(map[string]any{"id_token": rawID})
++	claims := new(localRefreshClaims)
++	got, err := p.authenticate(t.Context(), claims, func(*oauth2.Config) (*oauth2.Token, error) { return original, nil })
++	require.NoError(t, err)
++	require.True(t, refreshcoord.IsReference(got.RefreshToken))
++	require.Equal(t, "upstream-0", original.RefreshToken, "registration must not mutate exchange token")
++	require.Equal(t, rawID, claims.Raw)
++	require.Equal(t, rawID, got.Extra("id_token"))
++	// A second login has its own lineage even with the same issuer and client.
++	other, err := p.authenticate(t.Context(), new(localRefreshClaims), func(*oauth2.Config) (*oauth2.Token, error) { return original, nil })
++	require.NoError(t, err)
++	require.NotEqual(t, got.RefreshToken, other.RefreshToken)
++}
++
++func TestLocalRefreshAuthorityRejectsMissingRotatedBearer(t *testing.T) {
++	for _, empty := range []bool{false, true} {
++		name := "omitted"
++		if empty {
++			name = "empty"
++		}
++		t.Run(name, func(t *testing.T) {
++			requests := 0
++			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				requests++
++				response := map[string]any{"access_token": "new-access", "token_type": "Bearer", "expires_in": 3600}
++				if empty {
++					response["refresh_token"] = ""
++				}
++				w.Header().Set("Content-Type", "application/json")
++				_ = json.NewEncoder(w).Encode(response)
++			}))
++			defer server.Close()
++			c := testLocalRefreshCoordinator(t)
++			p := testLocalRefreshProvider(c, server.URL, "issuer", "public-client")
++			original := registerLocalRefresh(t, p)
++			for range 2 {
++				next, err := p.Refresh(t.Context(), original, new(localRefreshClaims))
++				require.Error(t, err, "OAuth library fallback to the old bearer must not be accepted")
++				require.Nil(t, next)
++			}
++			require.Equal(t, 1, requests, "an incomplete rotation response must permanently fail this lineage closed")
++		})
++	}
++}
+diff --git a/pkg/identity/refreshcoord/coordinator.go b/pkg/identity/refreshcoord/coordinator.go
+new file mode 100644
+index 0000000..c73e98f
+--- /dev/null
++++ b/pkg/identity/refreshcoord/coordinator.go
+@@ -0,0 +1,337 @@
++// Package refreshcoord owns rotating refresh tokens for one process on a durable
++// local filesystem. References may be copied; upstream refresh bearers may not.
++package refreshcoord
++
++import (
++	"context"
++	"crypto/rand"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++
++	"golang.org/x/oauth2"
++	"golang.org/x/sys/unix"
++)
++
++const prefix = "pomerium-refresh:v1:"
++const (
++	ready    = "ready"
++	inFlight = "in_flight"
++	failed   = "failed"
++)
++
++// ErrUnavailable requires a new login. It must never trigger a raw-token retry.
++var ErrUnavailable = errors.New("refresh authority unavailable; reauthentication required")
++
++// Coordinator must be shared by every consumer in a process. Its directory must
++// reside on a durable local filesystem supporting flock, atomic rename and fsync.
++// It is not a distributed lock and must not be used on network filesystems.
++type Coordinator struct {
++	lifecycle sync.RWMutex
++	closed    bool
++	dir       string
++	lock      *os.File
++	mu        sync.Mutex
++	lineages  map[string]*lineage
++	// write is replaceable by package tests to inject persistence failures.
++	write func(string, *record) error
++}
++
++type lineage struct {
++	mu       sync.Mutex
++	poisoned bool
++}
++
++type record struct {
++	Version int    `json:"version"`
++	Binding string `json:"binding"`
++	State   string `json:"state"`
++	Bearer  string `json:"bearer,omitempty"`
++}
++
++// IsReference reports whether s uses the reserved reference namespace, even
++// when malformed or from an unsupported version. Never send such values upstream.
++func IsReference(s string) bool {
++	return strings.HasPrefix(s, "pomerium-refresh:")
++}
++
++func referenceID(s string) (string, error) {
++	if !strings.HasPrefix(s, prefix) {
++		return "", ErrUnavailable
++	}
++	id := strings.TrimPrefix(s, prefix)
++	if len(id) != 64 {
++		return "", ErrUnavailable
++	}
++	b, err := hex.DecodeString(id)
++	if err != nil || hex.EncodeToString(b) != id {
++		return "", ErrUnavailable
++	}
++	return id, nil
++}
++
++// Open takes an exclusive, nonblocking process lock until Close. Existing
++// directories must be private (0700), and symlink path components are rejected.
++func Open(dir string) (*Coordinator, error) {
++	path, err := filepath.Abs(dir)
++	if err != nil {
++		return nil, err
++	}
++	if err = rejectSymlinks(path); err != nil {
++		return nil, err
++	}
++	if err = os.MkdirAll(path, 0700); err != nil {
++		return nil, err
++	}
++	if err = rejectSymlinks(path); err != nil {
++		return nil, err
++	}
++	info, err := os.Lstat(path)
++	if err != nil {
++		return nil, err
++	}
++	if !info.IsDir() || info.Mode().Perm() != 0700 {
++		return nil, fmt.Errorf("refresh authority directory must have mode 0700")
++	}
++	fd, err := unix.Open(filepath.Join(path, ".lock"), unix.O_RDWR|unix.O_CREAT|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0600)
++	if err != nil {
++		return nil, err
++	}
++	lock := os.NewFile(uintptr(fd), ".lock")
++	lockInfo, err := lock.Stat()
++	if err != nil || !lockInfo.Mode().IsRegular() || lockInfo.Mode().Perm() != 0600 {
++		_ = lock.Close()
++		return nil, fmt.Errorf("refresh authority lock must be a private regular file")
++	}
++	if err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
++		_ = lock.Close()
++		return nil, fmt.Errorf("refresh authority already locked: %w", err)
++	}
++	// Sync each directory entry created by MkdirAll, before admitting tokens.
++	for current := path; ; current = filepath.Dir(current) {
++		directory, err := os.Open(current)
++		if err != nil {
++			_ = lock.Close()
++			return nil, err
++		}
++		err = directory.Sync()
++		_ = directory.Close()
++		if err != nil {
++			_ = lock.Close()
++			return nil, err
++		}
++		if filepath.Dir(current) == current {
++			break
++		}
++	}
++	c := &Coordinator{dir: path, lock: lock, lineages: make(map[string]*lineage)}
++	c.write = c.writeRecord
++	return c, nil
++}
++
++func rejectSymlinks(path string) error {
++	for {
++		info, err := os.Lstat(path)
++		if err != nil && !os.IsNotExist(err) {
++			return err
++		}
++		if err == nil && info.Mode()&os.ModeSymlink != 0 {
++			return fmt.Errorf("refresh authority refuses symlink paths")
++		}
++		parent := filepath.Dir(path)
++		if parent == path {
++			return nil
++		}
++		path = parent
++	}
++}
++
++// Close waits for active refreshes before releasing the directory lock.
++func (c *Coordinator) Close() error {
++	c.lifecycle.Lock()
++	defer c.lifecycle.Unlock()
++	if c.closed {
++		return nil
++	}
++	c.closed = true
++	// Closing the descriptor releases flock, without an unlock/relock window.
++	return c.lock.Close()
++}
++
++func clone(token *oauth2.Token) *oauth2.Token {
++	copy := *token // Preserve oauth2's unexported extras as well as public fields.
++	return &copy
++}
++
++// referenceToken retains the ID-token extra needed by generic OIDC claim
++// validation, but discards the raw token response (which can include another
++// copy of the upstream refresh bearer). This deployment supports generic OIDC.
++func referenceToken(token *oauth2.Token) *oauth2.Token {
++	return token.WithExtra(map[string]any{"id_token": token.Extra("id_token")})
++}
++
++// Register creates an independent lineage for every initial login. The returned
++// token contains only a reference; callers must discard the raw refresh bearer.
++func (c *Coordinator) Register(binding string, token *oauth2.Token) (*oauth2.Token, error) {
++	c.lifecycle.RLock()
++	defer c.lifecycle.RUnlock()
++	if c.closed || binding == "" || token == nil || token.AccessToken == "" || token.RefreshToken == "" || strings.HasPrefix(token.RefreshToken, "pomerium-refresh:") {
++		return nil, ErrUnavailable
++	}
++	var random [32]byte
++	if _, err := rand.Read(random[:]); err != nil {
++		return nil, err
++	}
++	id := hex.EncodeToString(random[:])
++	r := &record{Version: 1, Binding: binding, State: ready, Bearer: token.RefreshToken}
++	if err := c.write(id, r); err != nil {
++		return nil, fmt.Errorf("%w: register persistence: %v", ErrUnavailable, err)
++	}
++	out := referenceToken(token)
++	out.RefreshToken = prefix + id
++	return out, nil
++}
++
++func (c *Coordinator) getLineage(id string) *lineage {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	l := c.lineages[id]
++	if l == nil {
++		l = new(lineage)
++		c.lineages[id] = l
++	}
++	return l
++}
++
++// Refresh serializes all consumers of a lineage. Once an upstream operation may
++// have consumed a token, an uncertain result poisons the lineage in this process.
++// A durable in-flight or failed record fails closed after restart. If publishing
++// the successor succeeded but its fsync and the failure write both failed, a
++// restart may recover the ready successor; it can never recover the old bearer
++// as ready, because the in-flight predecessor was fsynced before the call.
++func (c *Coordinator) Refresh(ctx context.Context, binding string, token *oauth2.Token, refresh func(context.Context, *oauth2.Token) (*oauth2.Token, error)) (*oauth2.Token, error) {
++	c.lifecycle.RLock()
++	defer c.lifecycle.RUnlock()
++	if c.closed || token == nil || binding == "" || refresh == nil {
++		return nil, ErrUnavailable
++	}
++	id, err := referenceID(token.RefreshToken)
++	if err != nil {
++		return nil, err
++	}
++	l := c.getLineage(id)
++	l.mu.Lock()
++	defer l.mu.Unlock()
++	if l.poisoned {
++		return nil, ErrUnavailable
++	}
++	r, err := c.readRecord(id)
++	if err != nil {
++		return nil, fmt.Errorf("%w: invalid or missing record", ErrUnavailable)
++	}
++	if r.Binding != binding || r.State != ready {
++		return nil, ErrUnavailable
++	}
++	if err := ctx.Err(); err != nil {
++		return nil, err
++	}
++	upstream := clone(token)
++	upstream.RefreshToken = r.Bearer
++	r.State = inFlight
++	if err := c.write(id, r); err != nil {
++		c.poison(id, l, r)
++		return nil, fmt.Errorf("%w: pre-refresh persistence", ErrUnavailable)
++	}
++	// Panic also leaves the in-memory lineage poisoned and the durable record
++	// in-flight. Do not recover here: preserve the caller's panic semantics.
++	l.poisoned = true
++	next, err := refresh(ctx, upstream)
++	if err != nil || next == nil || next.AccessToken == "" || next.RefreshToken == "" || strings.HasPrefix(next.RefreshToken, "pomerium-refresh:") {
++		c.poison(id, l, r)
++		return nil, fmt.Errorf("%w: uncertain upstream refresh", ErrUnavailable)
++	}
++	r.Bearer, r.State = next.RefreshToken, ready
++	if err := c.write(id, r); err != nil {
++		c.poison(id, l, r)
++		return nil, fmt.Errorf("%w: post-refresh persistence", ErrUnavailable)
++	}
++	l.poisoned = false
++	out := referenceToken(next)
++	out.RefreshToken = token.RefreshToken
++	return out, nil
++}
++
++func (c *Coordinator) poison(id string, l *lineage, r *record) {
++	l.poisoned = true
++	r.State, r.Bearer = failed, ""
++	_ = c.write(id, r)
++}
++
++func (c *Coordinator) readRecord(id string) (*record, error) {
++	fd, err := unix.Open(filepath.Join(c.dir, id+".json"), unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
++	if err != nil {
++		return nil, err
++	}
++	file := os.NewFile(uintptr(fd), id)
++	defer file.Close()
++	info, err := file.Stat()
++	if err != nil {
++		return nil, err
++	}
++	if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() > 1<<20 {
++		return nil, ErrUnavailable
++	}
++	decoder := json.NewDecoder(io.LimitReader(file, 1<<20))
++	decoder.DisallowUnknownFields()
++	var r record
++	if err := decoder.Decode(&r); err != nil {
++		return nil, err
++	}
++	var extra any
++	if err := decoder.Decode(&extra); err != io.EOF {
++		return nil, ErrUnavailable
++	}
++	if r.Version != 1 || r.Binding == "" || (r.State != ready && r.State != inFlight && r.State != failed) || (r.State == ready && (r.Bearer == "" || strings.HasPrefix(r.Bearer, "pomerium-refresh:"))) {
++		return nil, ErrUnavailable
++	}
++	return &r, nil
++}
++
++func (c *Coordinator) writeRecord(id string, r *record) error {
++	data, err := json.Marshal(r)
++	if err != nil {
++		return err
++	}
++	file, err := os.CreateTemp(c.dir, ".refresh-*") // CreateTemp uses 0600.
++	if err != nil {
++		return err
++	}
++	name := file.Name()
++	defer os.Remove(name)
++	if _, err := file.Write(data); err != nil {
++		_ = file.Close()
++		return err
++	}
++	if err := file.Sync(); err != nil {
++		_ = file.Close()
++		return err
++	}
++	if err := file.Close(); err != nil {
++		return err
++	}
++	if err := os.Rename(name, filepath.Join(c.dir, id+".json")); err != nil {
++		return err
++	}
++	dir, err := os.Open(c.dir)
++	if err != nil {
++		return err
++	}
++	defer dir.Close()
++	return dir.Sync()
++}
+diff --git a/pkg/identity/refreshcoord/coordinator_test.go b/pkg/identity/refreshcoord/coordinator_test.go
+new file mode 100644
+index 0000000..90042d8
+--- /dev/null
++++ b/pkg/identity/refreshcoord/coordinator_test.go
+@@ -0,0 +1,425 @@
++package refreshcoord
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"os"
++	"path/filepath"
++	"sync"
++	"testing"
++
++	"golang.org/x/oauth2"
++)
++
++func openTest(t *testing.T) (*Coordinator, string) {
++	t.Helper()
++	dir := filepath.Join(t.TempDir(), "authority")
++	c, err := Open(dir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = c.Close() })
++	return c, dir
++}
++func registerTest(t *testing.T, c *Coordinator) *oauth2.Token {
++	t.Helper()
++	token, err := c.Register("issuer/client", (&oauth2.Token{AccessToken: "access", RefreshToken: "refresh-0"}).WithExtra(map[string]any{"id_token": "id"}))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !IsReference(token.RefreshToken) || token.Extra("id_token") != "id" {
++		t.Fatal("reference or extras lost")
++	}
++	return token
++}
++
++func TestSerialConsumers(t *testing.T) {
++	c, _ := openTest(t)
++	token := registerTest(t, c)
++	n := 0 // Protected by the coordinator's lineage lock.
++	callback := func(_ context.Context, input *oauth2.Token) (*oauth2.Token, error) {
++		if want := fmt.Sprintf("refresh-%d", n); input.RefreshToken != want {
++			return nil, fmt.Errorf("got %s want %s", input.RefreshToken, want)
++		}
++		n++
++		return (&oauth2.Token{AccessToken: "next", RefreshToken: fmt.Sprintf("refresh-%d", n)}).WithExtra(map[string]any{"id_token": "next-id"}), nil
++	}
++	var wg sync.WaitGroup
++	for range 40 {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			out, err := c.Refresh(context.Background(), "issuer/client", token, callback)
++			if err != nil {
++				t.Error(err)
++				return
++			}
++			if out.RefreshToken != token.RefreshToken || out.Extra("id_token") != "next-id" {
++				t.Error("reference or extras lost")
++			}
++		}()
++	}
++	wg.Wait()
++	if n != 40 {
++		t.Fatalf("calls = %d", n)
++	}
++	if token.AccessToken != "access" || token.Extra("id_token") != "id" {
++		t.Fatal("caller token mutated")
++	}
++}
++
++func TestExclusiveLockAndRestart(t *testing.T) {
++	c, dir := openTest(t)
++	token := registerTest(t, c)
++	if other, err := Open(dir); err == nil {
++		_ = other.Close()
++		t.Fatal("second open succeeded")
++	}
++	_, err := c.Refresh(context.Background(), "issuer/client", token, func(_ context.Context, in *oauth2.Token) (*oauth2.Token, error) {
++		in.RefreshToken = "rotated"
++		return in, nil
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := c.Close(); err != nil {
++		t.Fatal(err)
++	}
++	c, err = Open(dir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer c.Close()
++	_, err = c.Refresh(context.Background(), "issuer/client", token, func(_ context.Context, in *oauth2.Token) (*oauth2.Token, error) {
++		if in.RefreshToken != "rotated" {
++			t.Fatalf("got %s", in.RefreshToken)
++		}
++		return in, nil
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestAmbiguousRefreshFailsClosed(t *testing.T) {
++	for _, kind := range []string{"error", "nil", "empty-access", "empty-refresh", "panic"} {
++		t.Run(kind, func(t *testing.T) {
++			c, dir := openTest(t)
++			token := registerTest(t, c)
++			calls := 0
++			callback := func(context.Context, *oauth2.Token) (*oauth2.Token, error) {
++				calls++
++				switch kind {
++				case "error":
++					return nil, errors.New("timeout after consumption")
++				case "nil":
++					return nil, nil
++				case "empty-access":
++					return &oauth2.Token{RefreshToken: "new"}, nil
++				case "empty-refresh":
++					return &oauth2.Token{AccessToken: "new"}, nil
++				default:
++					panic("crash")
++				}
++			}
++			func() {
++				defer func() {
++					if kind == "panic" && recover() == nil {
++						t.Error("expected panic")
++					}
++				}()
++				_, err := c.Refresh(context.Background(), "issuer/client", token, callback)
++				if err == nil {
++					t.Error("expected rejection")
++				}
++			}()
++			if _, err := c.Refresh(context.Background(), "issuer/client", token, callback); !errors.Is(err, ErrUnavailable) {
++				t.Fatal(err)
++			}
++			_ = c.Close()
++			c, err := Open(dir)
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer c.Close()
++			if _, err := c.Refresh(context.Background(), "issuer/client", token, callback); !errors.Is(err, ErrUnavailable) {
++				t.Fatal(err)
++			}
++			if calls != 1 {
++				t.Fatalf("calls = %d", calls)
++			}
++		})
++	}
++}
++
++func TestWriteFailuresPoison(t *testing.T) {
++	for _, failAt := range []int{1, 2} {
++		t.Run(fmt.Sprint(failAt), func(t *testing.T) {
++			c, dir := openTest(t)
++			token := registerTest(t, c)
++			realWrite := c.write
++			writes, calls := 0, 0
++			c.write = func(id string, r *record) error {
++				writes++
++				if writes == failAt {
++					return errors.New("injected write failure")
++				}
++				return realWrite(id, r)
++			}
++			callback := func(_ context.Context, in *oauth2.Token) (*oauth2.Token, error) {
++				calls++
++				in.RefreshToken = "new"
++				return in, nil
++			}
++			if _, err := c.Refresh(context.Background(), "issuer/client", token, callback); !errors.Is(err, ErrUnavailable) {
++				t.Fatal(err)
++			}
++			if _, err := c.Refresh(context.Background(), "issuer/client", token, callback); !errors.Is(err, ErrUnavailable) {
++				t.Fatal(err)
++			}
++			_ = c.Close()
++			c, err := Open(dir)
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer c.Close()
++			if _, err := c.Refresh(context.Background(), "issuer/client", token, callback); !errors.Is(err, ErrUnavailable) {
++				t.Fatal(err)
++			}
++			if calls != failAt-1 {
++				t.Fatalf("calls = %d", calls)
++			}
++		})
++	}
++}
++
++func TestInvalidReferencesAndBinding(t *testing.T) {
++	c, dir := openTest(t)
++	token := registerTest(t, c)
++	callback := func(context.Context, *oauth2.Token) (*oauth2.Token, error) {
++		t.Fatal("must not reach upstream")
++		return nil, nil
++	}
++	for _, ref := range []string{"", "raw-bearer", prefix + "../escape", prefix + "no", prefix + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"} {
++		in := clone(token)
++		in.RefreshToken = ref
++		if _, err := c.Refresh(context.Background(), "issuer/client", in, callback); !errors.Is(err, ErrUnavailable) {
++			t.Fatalf("%q: %v", ref, err)
++		}
++	}
++	if _, err := c.Refresh(context.Background(), "different-client", token, callback); !errors.Is(err, ErrUnavailable) {
++		t.Fatal(err)
++	}
++	id, _ := referenceID(token.RefreshToken)
++	if err := os.WriteFile(filepath.Join(dir, id+".json"), []byte(`{"version":1}`), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := c.Refresh(context.Background(), "issuer/client", token, callback); !errors.Is(err, ErrUnavailable) {
++		t.Fatal(err)
++	}
++}
++
++func TestIndependentLoginAndPrivateFiles(t *testing.T) {
++	c, dir := openTest(t)
++	a, b := registerTest(t, c), registerTest(t, c)
++	if a.RefreshToken == b.RefreshToken {
++		t.Fatal("logins share lineage")
++	}
++	entries, err := os.ReadDir(dir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, e := range entries {
++		info, err := e.Info()
++		if err != nil {
++			t.Fatal(err)
++		}
++		if info.Mode().Perm() != 0600 {
++			t.Fatalf("%s permissions %v", e.Name(), info.Mode())
++		}
++	}
++	for _, token := range []*oauth2.Token{nil, {}, {AccessToken: "a"}, {RefreshToken: "r"}, a} {
++		if _, err := c.Register("issuer/client", token); err == nil {
++			t.Fatal("accepted invalid initial token")
++		}
++	}
++}
++
++func TestSymlinksRejected(t *testing.T) {
++	c, dir := openTest(t)
++	token := registerTest(t, c)
++	alias := filepath.Join(t.TempDir(), "alias")
++	if err := os.Symlink(dir, alias); err != nil {
++		t.Fatal(err)
++	}
++	if other, err := Open(alias); err == nil {
++		_ = other.Close()
++		t.Fatal("accepted symlink directory")
++	}
++	id, _ := referenceID(token.RefreshToken)
++	path := filepath.Join(dir, id+".json")
++	if err := os.Remove(path); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Symlink(filepath.Join(dir, ".lock"), path); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := c.Refresh(context.Background(), "issuer/client", token, func(context.Context, *oauth2.Token) (*oauth2.Token, error) {
++		t.Fatal("upstream called")
++		return nil, nil
++	}); !errors.Is(err, ErrUnavailable) {
++		t.Fatal(err)
++	}
++}
++
++func TestPersistentWriteOutage(t *testing.T) {
++	c, dir := openTest(t)
++	token := registerTest(t, c)
++	realWrite := c.write
++	writes, calls := 0, 0
++	c.write = func(id string, r *record) error {
++		writes++
++		if writes >= 2 {
++			return errors.New("disk unavailable")
++		}
++		return realWrite(id, r)
++	}
++	callback := func(_ context.Context, in *oauth2.Token) (*oauth2.Token, error) {
++		calls++
++		in.RefreshToken = "new"
++		return in, nil
++	}
++	if _, err := c.Refresh(context.Background(), "issuer/client", token, callback); !errors.Is(err, ErrUnavailable) {
++		t.Fatal(err)
++	}
++	if _, err := c.Refresh(context.Background(), "issuer/client", token, callback); !errors.Is(err, ErrUnavailable) {
++		t.Fatal(err)
++	}
++	_ = c.Close()
++	c, err := Open(dir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer c.Close()
++	if _, err := c.Refresh(context.Background(), "issuer/client", token, callback); !errors.Is(err, ErrUnavailable) {
++		t.Fatal(err)
++	}
++	if calls != 1 {
++		t.Fatalf("calls = %d", calls)
++	}
++}
++
++func TestCancellationBeforeCallDoesNotPoison(t *testing.T) {
++	c, _ := openTest(t)
++	token := registerTest(t, c)
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++	calls := 0
++	callback := func(_ context.Context, in *oauth2.Token) (*oauth2.Token, error) { calls++; return in, nil }
++	if _, err := c.Refresh(ctx, "issuer/client", token, callback); !errors.Is(err, context.Canceled) {
++		t.Fatal(err)
++	}
++	if calls != 0 {
++		t.Fatal("called canceled upstream")
++	}
++	if _, err := c.Refresh(context.Background(), "issuer/client", token, callback); err != nil {
++		t.Fatal(err)
++	}
++	if calls != 1 {
++		t.Fatal("cancellation poisoned lineage")
++	}
++}
++
++func TestClosedAuthority(t *testing.T) {
++	c, _ := openTest(t)
++	token := registerTest(t, c)
++	_ = c.Close()
++	if _, err := c.Register("issuer/client", &oauth2.Token{AccessToken: "a", RefreshToken: "r"}); !errors.Is(err, ErrUnavailable) {
++		t.Fatal(err)
++	}
++	if _, err := c.Refresh(context.Background(), "issuer/client", token, func(context.Context, *oauth2.Token) (*oauth2.Token, error) {
++		t.Fatal("upstream called")
++		return nil, nil
++	}); !errors.Is(err, ErrUnavailable) {
++		t.Fatal(err)
++	}
++}
++
++func TestReservedReferenceNamespace(t *testing.T) {
++	for _, ref := range []string{"pomerium-refresh:v2:future", "pomerium-refresh:", "pomerium-refresh:v1:malformed"} {
++		if !IsReference(ref) {
++			t.Errorf("reserved reference not detected: %s", ref)
++		}
++	}
++	if IsReference("ordinary-upstream-token") {
++		t.Fatal("raw token treated as reference")
++	}
++}
++
++func TestPublishedSuccessorWithFailedAcknowledgement(t *testing.T) {
++	c, dir := openTest(t)
++	token := registerTest(t, c)
++	realWrite := c.write
++	writes := 0
++	c.write = func(id string, r *record) error {
++		writes++
++		if writes == 1 {
++			return realWrite(id, r)
++		}
++		if writes == 2 {
++			if err := realWrite(id, r); err != nil {
++				return err
++			}
++			return errors.New("failed acknowledgement after rename")
++		}
++		return errors.New("failed poison persistence")
++	}
++	callback := func(_ context.Context, in *oauth2.Token) (*oauth2.Token, error) {
++		in.RefreshToken = "successor"
++		return in, nil
++	}
++	if _, err := c.Refresh(context.Background(), "issuer/client", token, callback); !errors.Is(err, ErrUnavailable) {
++		t.Fatal(err)
++	}
++	if _, err := c.Refresh(context.Background(), "issuer/client", token, callback); !errors.Is(err, ErrUnavailable) {
++		t.Fatal(err)
++	}
++	_ = c.Close()
++	c, err := Open(dir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer c.Close()
++	if _, err := c.Refresh(context.Background(), "issuer/client", token, func(_ context.Context, in *oauth2.Token) (*oauth2.Token, error) {
++		if in.RefreshToken != "successor" {
++			t.Fatal("old bearer resurrected")
++		}
++		return in, nil
++	}); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestReferenceDoesNotRetainRawRefreshExtra(t *testing.T) {
++	c, err := Open(filepath.Join(t.TempDir(), "authority"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer c.Close()
++	initial := (&oauth2.Token{AccessToken: "a", RefreshToken: "secret"}).WithExtra(map[string]any{"refresh_token": "secret", "id_token": "id"})
++	ref, err := c.Register("binding", initial)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if ref.Extra("refresh_token") != nil || ref.Extra("id_token") != "id" {
++		t.Fatal("unsafe or missing extras")
++	}
++	next, err := c.Refresh(context.Background(), "binding", ref, func(context.Context, *oauth2.Token) (*oauth2.Token, error) { return initial, nil })
++	if err != nil {
++		t.Fatal(err)
++	}
++	if next.Extra("refresh_token") != nil || next.Extra("id_token") != "id" {
++		t.Fatal("unsafe or missing extras after refresh")
++	}
++}
