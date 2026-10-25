@@ -1,0 +1,732 @@
+diff --git a/server/grants/refresh.go b/server/grants/refresh.go
+index 6671aa7..aa163fc 100644
+--- a/server/grants/refresh.go
++++ b/server/grants/refresh.go
+@@ -116,6 +116,14 @@ func (g *refresh) Authorize(ctx context.Context, req *Request, client storage.Cl
+ 	var connectorData []byte
+ 	var connectorDataErr error
+ 	if userIdent == nil {
++		// Issue #10 (bug 2): every lineage of this (user, connector) pair
++		// shares one upstream credential. Serialize at that shared boundary
++		// and read connector data under the lock, so a waiting lineage
++		// refreshes with the successor token instead of a consumed one. The
++		// read still happens outside UpdateRefreshToken's transaction (the
++		// SQLite deadlock the read-order patch fixed).
++		release := g.issuer.Refresh.LockConnectorRefresh(refreshToken.Claims.UserID, refreshToken.ConnectorID)
++		defer release()
+ 		connectorData, connectorDataErr = g.refreshConnectorData(ctx, refreshToken)
+ 	}
+ 	freshIdentity := func(ctx context.Context) (connector.Identity, error) {
+@@ -191,7 +199,11 @@ func (g *refresh) sessionID(ctx context.Context, refreshToken *storage.RefreshTo
+ 		return "", nil
+ 	}
+ 
+-	ref, ok := offlineSessions.Refresh[refreshToken.ClientID]
++	ref, ok := offlineSessions.Refresh[tokens.GrantRefKey(refreshToken.ID)]
++	if !ok {
++		// Legacy rows (and grants created before this build) key by client.
++		ref, ok = offlineSessions.Refresh[refreshToken.ClientID]
++	}
+ 	if !ok || ref.SessionID == "" {
+ 		// Issued outside a browser flow — the password grant, or before sessions were
+ 		// turned on. There is no session to be bound to, so there is none to end.
+@@ -206,8 +218,10 @@ func (g *refresh) sessionID(ctx context.Context, refreshToken *storage.RefreshTo
+ 		// Through the store, not storage.DeleteRefresh: the token and the offline
+ 		// session's reference to it have to go together, or the admin API lists a
+ 		// token that no longer exists and fails trying to revoke it.
+-		g.issuer.Refresh.RevokeClients(ctx, refreshToken.Claims.UserID, refreshToken.ConnectorID,
+-			[]string{refreshToken.ClientID})
++		// Issue #10: end only this session's grants for the client; other
++		// independent logins of the same client keep their tokens.
++		g.issuer.Refresh.RevokeSession(ctx, refreshToken.Claims.UserID, refreshToken.ConnectorID,
++			refreshToken.ClientID, ref.SessionID)
+ 
+ 		g.logger.InfoContext(ctx, "refresh: refused, session ended",
+ 			"client_id", refreshToken.ClientID, "user_id", refreshToken.Claims.UserID)
+diff --git a/server/server_test.go b/server/server_test.go
+index 24dc272..fefc880 100644
+--- a/server/server_test.go
++++ b/server/server_test.go
+@@ -1460,9 +1460,12 @@ func TestRefreshTokenFlow(t *testing.T) {
+ 	}
+ 	defer resp.Body.Close()
+ 
+-	// try to refresh expired token with old refresh token.
+-	if _, err := oauth2Client.config.TokenSource(ctx, tok).Token(); err == nil {
+-		t.Errorf("Token refreshed with invalid refresh token, error expected.")
++	// Issue #10: this second browser login starts an independent lineage
++	// (distinct dex session), so the first refresh token stays valid and
++	// refreshing with it must succeed. Same-session re-login replacement is
++	// covered in tokens.TestRefreshStoreCreate.
++	if _, err := oauth2Client.config.TokenSource(ctx, tok).Token(); err != nil {
++		t.Errorf("independent re-login must not revoke the earlier refresh token: %v", err)
+ 	}
+ }
+ 
+diff --git a/server/tokens/connlock.go b/server/tokens/connlock.go
+new file mode 100644
+index 0000000..a7c7ef4
+--- /dev/null
++++ b/server/tokens/connlock.go
+@@ -0,0 +1,36 @@
++package tokens
++
++import "sync"
++
++// ConnectorRefreshLock serializes upstream connector refreshes per
++// (userID, connectorID) pair. Offline-session connector data is shared by
++// every refresh lineage of that pair, so a rotating upstream credential must
++// be consumed by at most one lineage at a time (issue #10, bug 2). The lock
++// is process-scoped: this deployment runs a single Dex process per storage
++// volume (see the refresh-authority README), matching the single-writer
++// requirement already enforced for the Pomerium authority.
++type ConnectorRefreshLock struct {
++	mu    sync.Mutex
++	locks map[string]*sync.Mutex
++}
++
++// NewConnectorRefreshLock returns an empty keyed mutex.
++func NewConnectorRefreshLock() *ConnectorRefreshLock {
++	return &ConnectorRefreshLock{locks: make(map[string]*sync.Mutex)}
++}
++
++// Acquire blocks until no other refresh holds the (user, connector) pair and
++// returns the release function. The map entry lives for the process
++// lifetime; connector counts are small and bounded by config.
++func (l *ConnectorRefreshLock) Acquire(userID, connectorID string) (release func()) {
++	key := userID + "\x00" + connectorID
++	l.mu.Lock()
++	m, ok := l.locks[key]
++	if !ok {
++		m = &sync.Mutex{}
++		l.locks[key] = m
++	}
++	l.mu.Unlock()
++	m.Lock()
++	return func() { m.Unlock() }
++}
+diff --git a/server/tokens/refresh_store.go b/server/tokens/refresh_store.go
+index 0201e4a..4c537ea 100644
+--- a/server/tokens/refresh_store.go
++++ b/server/tokens/refresh_store.go
+@@ -5,6 +5,8 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"log/slog"
++	"sort"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/dexidp/dex/connector"
+@@ -16,14 +18,62 @@ import (
+ // offline-session references in sync. It is the single owner of refresh-token
+ // persistence.
+ type RefreshStore struct {
+-	storage storage.Storage
+-	now     func() time.Time
+-	logger  *slog.Logger
++	storage  storage.Storage
++	now      func() time.Time
++	logger   *slog.Logger
++	connLock *ConnectorRefreshLock
++}
++
++// GrantRefPrefix keys an offline-session reference by refresh-token ID so
++// several active logins of the same client coexist (issue #10, bug 1). The
++// prefix cannot collide with a real client ID because storage IDs are hex.
++const GrantRefPrefix = "grant:"
++
++// MaxClientGrantRefs bounds the per-client lineage set in one offline
++// session. Exceeding it revokes the oldest grant explicitly.
++const MaxClientGrantRefs = 8
++
++// GrantRefKey is the offline-session map key holding the reference for one
++// refresh grant.
++func GrantRefKey(refreshID string) string { return GrantRefPrefix + refreshID }
++
++// LockConnectorRefresh blocks until no other refresh of this
++// (user, connector) pair holds the shared upstream credential. The returned
++// release function must run after the rotation commits (issue #10, bug 2).
++func (rt *RefreshStore) LockConnectorRefresh(userID, connectorID string) (release func()) {
++	return rt.connLock.Acquire(userID, connectorID)
++}
++
++// pruneGrantRefs drops the oldest per-client grant references beyond max and
++// returns the evicted token IDs for deletion.
++func pruneGrantRefs(refs map[string]*storage.RefreshTokenRef, clientID string, max int) []string {
++	var keys []string
++	for key, ref := range refs {
++		if strings.HasPrefix(key, GrantRefPrefix) && ref.ClientID == clientID {
++			keys = append(keys, key)
++		}
++	}
++	if len(keys) <= max {
++		return nil
++	}
++	sort.Slice(keys, func(i, j int) bool {
++		a, b := refs[keys[i]], refs[keys[j]]
++		if a.CreatedAt.Equal(b.CreatedAt) {
++			return a.ID < b.ID
++		}
++		return a.CreatedAt.Before(b.CreatedAt)
++	})
++	evict := make([]string, 0, len(keys)-max)
++	for _, key := range keys[:len(keys)-max] {
++		evict = append(evict, refs[key].ID)
++		delete(refs, key)
++	}
++	return evict
+ }
+ 
+ // NewRefreshStore returns a store backed by the given storage.
+ func NewRefreshStore(storage storage.Storage, now func() time.Time, logger *slog.Logger) *RefreshStore {
+-	return &RefreshStore{storage: storage, now: now, logger: logger}
++	return &RefreshStore{storage: storage, now: now, logger: logger, connLock: NewConnectorRefreshLock()}
+ }
+ 
+ // Create issues a new refresh token for the authorization and records it in the
+@@ -77,7 +127,7 @@ func (rt *RefreshStore) Create(ctx context.Context, auth Authorization) (string,
+ 		offlineSessions := storage.OfflineSessions{
+ 			UserID:        refresh.Claims.UserID,
+ 			ConnID:        refresh.ConnectorID,
+-			Refresh:       map[string]*storage.RefreshTokenRef{tokenRef.ClientID: &tokenRef},
++			Refresh:       map[string]*storage.RefreshTokenRef{tokenRef.ClientID: &tokenRef, GrantRefKey(tokenRef.ID): &tokenRef},
+ 			ConnectorData: auth.ConnectorData,
+ 		}
+ 		if err := rt.storage.CreateOfflineSessions(ctx, offlineSessions); err != nil {
+@@ -85,15 +135,29 @@ func (rt *RefreshStore) Create(ctx context.Context, auth Authorization) (string,
+ 			return "", fmt.Errorf("create offline session: %w", err)
+ 		}
+ 	default:
+-		// Replace any existing refresh token for this client.
+-		if oldRef, ok := session.Refresh[tokenRef.ClientID]; ok {
+-			if err := rt.storage.DeleteRefresh(ctx, oldRef.ID); err != nil && err != storage.ErrNotFound {
+-				rollback()
+-				return "", fmt.Errorf("delete previous refresh token: %w", err)
+-			}
+-		}
++		// Issue #10 (bug 1): an independent login must not silently revoke
++		// earlier grants of the same user+connector+client. Every grant keeps
++		// its own reference; only a re-login within the same browser session
++		// replaces its predecessor, and MaxClientGrantRefs bounds the
++		// lineage set with explicit oldest-first revocation.
++		var evicted []string
+ 		if err := rt.storage.UpdateOfflineSessions(ctx, session.UserID, session.ConnID, func(old storage.OfflineSessions) (storage.OfflineSessions, error) {
++			// Legacy rows may hold only the plain client key; migrate the
++			// incumbent to a grant key before it stops being reachable.
++			if prev, ok := old.Refresh[tokenRef.ClientID]; ok && prev.ID != tokenRef.ID {
++				old.Refresh[GrantRefKey(prev.ID)] = prev
++			}
++			if auth.SessionID != "" {
++				for key, ref := range old.Refresh {
++					if ref.ClientID == tokenRef.ClientID && ref.SessionID == auth.SessionID {
++						evicted = append(evicted, ref.ID)
++						delete(old.Refresh, key)
++					}
++				}
++			}
+ 			old.Refresh[tokenRef.ClientID] = &tokenRef
++			old.Refresh[GrantRefKey(tokenRef.ID)] = &tokenRef
++			evicted = append(evicted, pruneGrantRefs(old.Refresh, tokenRef.ClientID, MaxClientGrantRefs)...)
+ 			if len(auth.ConnectorData) > 0 {
+ 				old.ConnectorData = auth.ConnectorData
+ 			}
+@@ -102,6 +166,19 @@ func (rt *RefreshStore) Create(ctx context.Context, auth Authorization) (string,
+ 			rollback()
+ 			return "", fmt.Errorf("update offline session: %w", err)
+ 		}
++		seen := make(map[string]struct{}, len(evicted))
++		for _, id := range evicted {
++			if id == refresh.ID {
++				continue
++			}
++			if _, dup := seen[id]; dup {
++				continue
++			}
++			seen[id] = struct{}{}
++			if err := rt.storage.DeleteRefresh(ctx, id); err != nil && err != storage.ErrNotFound {
++				rt.logger.ErrorContext(ctx, "failed to delete replaced refresh token", "token_id", id, "err", err)
++			}
++		}
+ 	}
+ 
+ 	return rawToken, nil
+@@ -229,11 +306,22 @@ func (rt *RefreshStore) Rotate(ctx context.Context, storageToken *storage.Refres
+ // updated connector data, on the user's offline session.
+ func (rt *RefreshStore) updateOfflineSession(ctx context.Context, refresh *storage.RefreshToken, ident connector.Identity, lastUsed time.Time) error {
+ 	offlineSessionUpdater := func(old storage.OfflineSessions) (storage.OfflineSessions, error) {
+-		if old.Refresh[refresh.ClientID].ID != refresh.ID {
+-			return old, errors.New("refresh token invalid")
++		// Issue #10: resolve this lineage by grant key; the plain client key
++		// names the newest grant and may refer to a different token. Legacy
++		// rows still resolve by client when the ID matches.
++		ref, ok := old.Refresh[GrantRefKey(refresh.ID)]
++		if !ok {
++			if legacy, ok2 := old.Refresh[refresh.ClientID]; ok2 && legacy.ID == refresh.ID {
++				ref = legacy
++			} else {
++				return old, errors.New("refresh token invalid")
++			}
++		}
++		ref.LastUsed = lastUsed
++		old.Refresh[GrantRefKey(refresh.ID)] = ref
++		if cur, ok := old.Refresh[refresh.ClientID]; ok && cur.ID == refresh.ID {
++			old.Refresh[refresh.ClientID] = ref
+ 		}
+-
+-		old.Refresh[refresh.ClientID].LastUsed = lastUsed
+ 		if len(ident.ConnectorData) > 0 {
+ 			old.ConnectorData = ident.ConnectorData
+ 		}
+@@ -297,8 +385,8 @@ func (rt *RefreshStore) revoke(ctx context.Context, userID, connectorID string,
+ 	}
+ 
+ 	tokenIDs := make(map[string]struct{}, len(offlineSessions.Refresh))
+-	for clientID, ref := range offlineSessions.Refresh {
+-		if match(clientID) {
++	for _, ref := range offlineSessions.Refresh {
++		if match(ref.ClientID) {
+ 			tokenIDs[ref.ID] = struct{}{}
+ 		}
+ 	}
+@@ -324,3 +412,43 @@ func (rt *RefreshStore) revoke(ctx context.Context, userID, connectorID string,
+ 		}
+ 	}
+ }
++
++// RevokeSession deletes the refresh grants one client holds for one ended
++// browser session, leaving independent logins of the same client alone
++// (issue #10). Best-effort like revoke.
++func (rt *RefreshStore) RevokeSession(ctx context.Context, userID, connectorID, clientID, sessionID string) {
++	if sessionID == "" {
++		return
++	}
++	offlineSessions, err := rt.storage.GetOfflineSessions(ctx, userID, connectorID)
++	if err != nil {
++		if !errors.Is(err, storage.ErrNotFound) {
++			rt.logger.ErrorContext(ctx, "failed to get offline sessions", "err", err)
++		}
++		return
++	}
++	tokenIDs := make(map[string]struct{})
++	for _, ref := range offlineSessions.Refresh {
++		if ref.ClientID == clientID && ref.SessionID == sessionID {
++			tokenIDs[ref.ID] = struct{}{}
++		}
++	}
++	if len(tokenIDs) == 0 {
++		return
++	}
++	if err := rt.storage.UpdateOfflineSessions(ctx, userID, connectorID, func(old storage.OfflineSessions) (storage.OfflineSessions, error) {
++		for key, ref := range old.Refresh {
++			if _, ok := tokenIDs[ref.ID]; ok {
++				delete(old.Refresh, key)
++			}
++		}
++		return old, nil
++	}); err != nil {
++		rt.logger.ErrorContext(ctx, "failed to update offline sessions", "err", err)
++	}
++	for id := range tokenIDs {
++		if err := rt.storage.DeleteRefresh(ctx, id); err != nil && !errors.Is(err, storage.ErrNotFound) {
++			rt.logger.ErrorContext(ctx, "failed to delete refresh token", "token_id", id, "err", err)
++		}
++	}
++}
+diff --git a/server/tokens/refresh_store_test.go b/server/tokens/refresh_store_test.go
+index 67a9693..5aaed83 100644
+--- a/server/tokens/refresh_store_test.go
++++ b/server/tokens/refresh_store_test.go
+@@ -40,7 +40,9 @@ func TestRefreshStoreCreate(t *testing.T) {
+ 	require.NoError(t, err)
+ 	require.Contains(t, sess.Refresh, "client-1")
+ 
+-	// A second create for the same client replaces the old token.
++	// Issue #10: a second create for the same client (no browser session) is
++	// an independent login. It must not revoke the first token; the plain
++	// client key advances to the newest grant while both keep grant keys.
+ 	second, err := rt.Create(ctx, auth)
+ 	require.NoError(t, err)
+ 	var secondTok internal.RefreshToken
+@@ -48,11 +50,30 @@ func TestRefreshStoreCreate(t *testing.T) {
+ 	require.NotEqual(t, firstTok.RefreshId, secondTok.RefreshId)
+ 
+ 	_, err = store.GetRefresh(ctx, firstTok.RefreshId)
+-	require.ErrorIs(t, err, storage.ErrNotFound)
++	require.NoError(t, err, "independent login must not revoke the earlier grant")
+ 
+ 	sess, err = store.GetOfflineSessions(ctx, "u1", "mock")
+ 	require.NoError(t, err)
+ 	require.Equal(t, secondTok.RefreshId, sess.Refresh["client-1"].ID)
++	require.Contains(t, sess.Refresh, GrantRefKey(firstTok.RefreshId))
++	require.Contains(t, sess.Refresh, GrantRefKey(secondTok.RefreshId))
++
++	// A re-login within the same browser session replaces only its own
++	// predecessor.
++	authSame := testAuthorization()
++	authSame.SessionID = "sess-1"
++	third, err := rt.Create(ctx, authSame)
++	require.NoError(t, err)
++	var thirdTok internal.RefreshToken
++	require.NoError(t, internal.Unmarshal(third, &thirdTok))
++	fourth, err := rt.Create(ctx, authSame)
++	require.NoError(t, err)
++	var fourthTok internal.RefreshToken
++	require.NoError(t, internal.Unmarshal(fourth, &fourthTok))
++	_, err = store.GetRefresh(ctx, thirdTok.RefreshId)
++	require.ErrorIs(t, err, storage.ErrNotFound, "same-session re-login replaces its predecessor")
++	_, err = store.GetRefresh(ctx, firstTok.RefreshId)
++	require.NoError(t, err, "same-session replacement leaves other lineages alone")
+ }
+ 
+ func TestRefreshStoreRotate(t *testing.T) {
+diff --git a/server/weechat_independent_grants_test.go b/server/weechat_independent_grants_test.go
+new file mode 100644
+index 0000000..4977aae
+--- /dev/null
++++ b/server/weechat_independent_grants_test.go
+@@ -0,0 +1,132 @@
++//go:build weechat_independent_grants
++
++package server
++
++import (
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"net/url"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/dexidp/dex/server/internal"
++	"github.com/dexidp/dex/server/tokens"
++	"github.com/dexidp/dex/storage"
++	"github.com/dexidp/dex/storage/sql"
++	"github.com/stretchr/testify/require"
++)
++
++// Issue #10 (bug 1): a second login for the same user+connector+client must
++// not revoke the first login's refresh grant. Both storages run through the
++// real token endpoint with strict rotation.
++func TestWeechatIndependentGrants(t *testing.T) {
++	for _, useSQLite := range []bool{false, true} {
++		t.Run(fmt.Sprintf("sqlite=%v", useSQLite), func(t *testing.T) { testWeechatIndependentGrants(t, useSQLite) })
++	}
++}
++
++func testWeechatIndependentGrants(t *testing.T, useSQLite bool) {
++	server, dex := newTestServer(t, func(c *Config) {
++		c.SessionConfig = nil
++		c.RefreshTokenPolicy = tokens.NewRefreshStrategy(true, 0, 0, 0, nil)
++		if useSQLite {
++			db, err := (&sql.SQLite3{File: filepath.Join(t.TempDir(), "dex.db")}).Open(newLogger(t))
++			require.NoError(t, err)
++			c.Storage = db
++		}
++	})
++	defer server.Close()
++	server.Client().Timeout = 5 * time.Second
++	mockRefreshTokenTestStorage(t, dex.storage, false)
++
++	refresh := func(raw string) (string, int) {
++		values := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {raw}}
++		req, err := http.NewRequest("POST", server.URL+"/token", strings.NewReader(values.Encode()))
++		require.NoError(t, err)
++		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
++		req.SetBasicAuth("test", "barfoo")
++		res, err := server.Client().Do(req)
++		require.NoError(t, err)
++		defer res.Body.Close()
++		body, err := io.ReadAll(res.Body)
++		require.NoError(t, err)
++		var out struct {
++			RefreshToken string `json:"refresh_token"`
++		}
++		_ = json.Unmarshal(body, &out)
++		return out.RefreshToken, res.StatusCode
++	}
++
++	mustRaw := func(id, tok string) string {
++		raw, err := internal.Marshal(&internal.RefreshToken{RefreshId: id, Token: tok})
++		require.NoError(t, err)
++		return raw
++	}
++
++	ctx := t.Context()
++	auth := func(sessionID string) tokens.Authorization {
++		return tokens.Authorization{
++			Client:      storage.Client{ID: "test", Secret: "barfoo"},
++			Claims:      storage.Claims{UserID: "1", Username: "jane", Email: "jane.doe@example.com", EmailVerified: true, Groups: []string{"a", "b"}},
++			Scopes:      []string{"openid", "email", "profile"},
++			ConnectorID: "test",
++			Nonce:       "foo",
++			SessionID:   sessionID,
++		}
++	}
++	login := func(sessionID string) string {
++		raw, err := dex.issuer.Refresh.Create(ctx, auth(sessionID))
++		require.NoError(t, err)
++		return raw
++	}
++
++	// Grant A (fixture) works before and after an independent login B.
++	rawA, code := refresh(mustRaw("test", "bar"))
++	require.Equal(t, http.StatusOK, code)
++	require.NotEmpty(t, rawA)
++
++	rawB := login("session-b")
++	rawA2, code := refresh(rawA)
++	require.Equal(t, http.StatusOK, code, "independent login B must not revoke grant A")
++	require.NotEmpty(t, rawA2)
++	rawB2, code := refresh(rawB)
++	require.Equal(t, http.StatusOK, code, "grant B must refresh")
++	require.NotEmpty(t, rawB2)
++
++	// Shared-login control: a re-login in the same browser session replaces
++	// only its own predecessor.
++	rawC := login("session-b")
++	_, code = refresh(rawB2)
++	require.Equal(t, http.StatusBadRequest, code, "same-session re-login must replace its own predecessor")
++	_, code = refresh(rawA2)
++	require.Equal(t, http.StatusOK, code, "same-session replacement must leave other lineages alone")
++	_, code = refresh(rawC)
++	require.Equal(t, http.StatusOK, code)
++
++	// Bounded lineages: beyond the per-client cap the oldest grant is
++	// revoked explicitly; the newest keeps working.
++	var last string
++	for i := 0; i < tokens.MaxClientGrantRefs; i++ {
++		last = login(fmt.Sprintf("session-cap-%d", i))
++	}
++	_, code = refresh(rawA2)
++	require.Equal(t, http.StatusBadRequest, code, "oldest grant beyond the cap must be revoked")
++	_, code = refresh(last)
++	require.Equal(t, http.StatusOK, code, "newest grant must survive pruning")
++
++	// The offline session carries per-grant references (legacy plain key
++	// migrated for the fixture grant).
++	sess, err := dex.storage.GetOfflineSessions(ctx, "1", "test")
++	require.NoError(t, err)
++	found := 0
++	for key := range sess.Refresh {
++		if strings.HasPrefix(key, tokens.GrantRefPrefix) {
++			found++
++		}
++	}
++	require.GreaterOrEqual(t, found, 2, "grant-keyed references must be present")
++}
+diff --git a/server/weechat_shared_connector_test.go b/server/weechat_shared_connector_test.go
+new file mode 100644
+index 0000000..3351add
+--- /dev/null
++++ b/server/weechat_shared_connector_test.go
+@@ -0,0 +1,206 @@
++//go:build weechat_shared_connector
++
++package server
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"log/slog"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"path/filepath"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/dexidp/dex/connector"
++	"github.com/dexidp/dex/server/connectors"
++	"github.com/dexidp/dex/server/oauth2"
++	"github.com/dexidp/dex/server/tokens"
++	"github.com/dexidp/dex/storage"
++	"github.com/dexidp/dex/storage/sql"
++	"github.com/stretchr/testify/require"
++)
++
++// rotatingConnector simulates an upstream whose refresh credential is
++// single-use: presenting the same generation twice is an upstream error,
++// matching providers such as GitHub. delay widens the shared-state window so
++// an unsynchronized implementation fails deterministically.
++type rotatingConnector struct {
++	mu        sync.Mutex
++	current   int
++	seen      map[string]bool
++	failNext  atomic.Bool
++	refreshes atomic.Int32
++	delay     time.Duration
++}
++
++func (c *rotatingConnector) Refresh(ctx context.Context, s connector.Scopes, ident connector.Identity) (connector.Identity, error) {
++	if c.failNext.CompareAndSwap(true, false) {
++		return ident, errors.New("synthetic upstream failure")
++	}
++	time.Sleep(c.delay)
++	data := string(ident.ConnectorData)
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	want := fmt.Sprintf("up-%d", c.current)
++	if data != want {
++		return ident, fmt.Errorf("stale connector data %q, want %q", data, want)
++	}
++	if c.seen[data] {
++		return ident, errors.New("upstream refresh credential reused")
++	}
++	c.seen[data] = true
++	c.current++
++	c.refreshes.Add(1)
++	ident.ConnectorData = []byte(fmt.Sprintf("up-%d", c.current))
++	return ident, nil
++}
++
++type rotatingConnectorConfig struct{ inst *rotatingConnector }
++
++func (c *rotatingConnectorConfig) Open(id string, logger *slog.Logger) (connector.Connector, error) {
++	return c.inst, nil
++}
++
++func TestWeechatSharedConnectorSerialization(t *testing.T) {
++	rc := &rotatingConnector{seen: make(map[string]bool), delay: 250 * time.Millisecond}
++	prev, existed := ConnectorsConfig["weechatRotating"]
++	ConnectorsConfig["weechatRotating"] = func() connectors.ConnectorConfig { return &rotatingConnectorConfig{inst: rc} }
++	defer func() {
++		if existed {
++			ConnectorsConfig["weechatRotating"] = prev
++		} else {
++			delete(ConnectorsConfig, "weechatRotating")
++		}
++	}()
++
++	dbFile := filepath.Join(t.TempDir(), "dex.db")
++	conns := []storage.Connector{{ID: "rot", Type: "weechatRotating", Name: "rot", ResourceVersion: "1"}}
++	first := true
++	build := func() (*httptest.Server, *Server) {
++		db, err := (&sql.SQLite3{File: dbFile}).Open(newLogger(t))
++		require.NoError(t, err)
++		cs := conns
++		if !first {
++			cs = nil // connector rows persist in the shared SQLite file
++		}
++		first = false
++		s, dex := newTestServerWith(t, cs, func(c *Config) {
++			c.Storage = db
++			c.SessionConfig = nil
++			c.RefreshTokenPolicy = tokens.NewRefreshStrategy(true, 0, 0, 0, nil)
++			c.AllowedGrantTypes = []string{oauth2.GrantTypeRefreshToken}
++		})
++		return s, dex
++	}
++
++	srv, dex := build()
++	srv.Client().Timeout = 10 * time.Second
++
++	ctx := t.Context()
++	for _, id := range []string{"c1", "c2"} {
++		require.NoError(t, dex.storage.CreateClient(ctx, storage.Client{
++			ID: id, Secret: "sec-" + id, RedirectURIs: []string{"https://example.com/cb"},
++		}))
++	}
++	claims := storage.Claims{UserID: "u9", Username: "bob", Email: "bob@example.com"}
++	mk := func(clientID string) string {
++		raw, err := dex.issuer.Refresh.Create(ctx, tokens.Authorization{
++			Client:      storage.Client{ID: clientID, Secret: "sec-" + clientID},
++			Claims:      claims,
++			Scopes:      []string{"openid", "email"},
++			ConnectorID: "rot",
++			Nonce:       "n",
++		})
++		require.NoError(t, err)
++		return raw
++	}
++	raw1 := mk("c1")
++	raw2 := mk("c2")
++	require.NoError(t, dex.storage.UpdateOfflineSessions(ctx, "u9", "rot", func(old storage.OfflineSessions) (storage.OfflineSessions, error) {
++		old.ConnectorData = []byte("up-0")
++		return old, nil
++	}))
++
++	// No require.* inside: this runs from goroutines for the concurrency case.
++	refresh := func(client *http.Client, base, clientID, secret, raw string) (string, int) {
++		values := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {raw}}
++		req, err := http.NewRequest("POST", base+"/token", strings.NewReader(values.Encode()))
++		if err != nil {
++			return "", 0
++		}
++		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
++		req.SetBasicAuth(clientID, secret)
++		res, err := client.Do(req)
++		if err != nil {
++			return "", 0
++		}
++		defer res.Body.Close()
++		body, _ := io.ReadAll(res.Body)
++		var out struct {
++			RefreshToken string `json:"refresh_token"`
++		}
++		_ = json.Unmarshal(body, &out)
++		return out.RefreshToken, res.StatusCode
++	}
++	do := func(clientID, secret, raw string) (string, int) {
++		return refresh(srv.Client(), srv.URL, clientID, secret, raw)
++	}
++
++	// Concurrent distinct-client refreshes overlapping their shared-state
++	// reads: serialization at the (user, connector) boundary must renew both.
++	var wg sync.WaitGroup
++	var out1, out2 string
++	var code1, code2 int
++	wg.Add(2)
++	go func() { defer wg.Done(); out1, code1 = do("c1", "sec-c1", raw1) }()
++	time.Sleep(50 * time.Millisecond)
++	go func() { defer wg.Done(); out2, code2 = do("c2", "sec-c2", raw2) }()
++	wg.Wait()
++	require.Equal(t, http.StatusOK, code1, "c1 refresh")
++	require.Equal(t, http.StatusOK, code2, "c2 must serialize behind c1, not reuse its credential")
++	require.Equal(t, int32(2), rc.refreshes.Load(), "exactly two upstream renewals")
++	require.Equal(t, 2, rc.current)
++
++	sess, err := dex.storage.GetOfflineSessions(ctx, "u9", "rot")
++	require.NoError(t, err)
++	require.Equal(t, "up-2", string(sess.ConnectorData), "successor must persist")
++
++	// Serial control.
++	out1, code1 = do("c1", "sec-c1", out1)
++	require.Equal(t, http.StatusOK, code1)
++	require.Equal(t, 3, rc.current)
++
++	// Failure path: an upstream error leaves the bearer usable; the retry
++	// chains from the last committed generation.
++	rc.failNext.Store(true)
++	_, code2 = do("c2", "sec-c2", out2)
++	require.NotEqual(t, http.StatusOK, code2, "forced upstream failure")
++	out2, code2 = do("c2", "sec-c2", out2)
++	require.Equal(t, http.StatusOK, code2, "retry after failure must succeed with the same bearer")
++	require.Equal(t, 4, rc.current)
++
++	srv.Close()
++
++	// Restart: a fresh server over the same durable storage continues the
++	// persisted chain and revokes cleanly.
++	srv2, dex2 := build()
++	defer srv2.Close()
++	srv2.Client().Timeout = 10 * time.Second
++	out1, code1 = refresh(srv2.Client(), srv2.URL, "c1", "sec-c1", out1)
++	require.Equal(t, http.StatusOK, code1, "post-restart refresh")
++	require.Equal(t, 5, rc.current)
++
++	dex2.issuer.Refresh.RevokeAll(ctx, "u9", "rot")
++	_, code1 = refresh(srv2.Client(), srv2.URL, "c1", "sec-c1", out1)
++	require.Equal(t, http.StatusBadRequest, code1, "revoked lineage must stop refreshing")
++	_, code2 = refresh(srv2.Client(), srv2.URL, "c2", "sec-c2", out2)
++	require.Equal(t, http.StatusBadRequest, code2, "sibling lineage must be revoked too")
++}
