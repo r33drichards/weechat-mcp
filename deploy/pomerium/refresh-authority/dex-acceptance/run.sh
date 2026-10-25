@@ -27,10 +27,13 @@ trap cleanup EXIT HUP INT TERM
 
 # Compute exact expected target files from HEAD in an isolated directory. Accept
 # only pristine targets or this exact patch, never unrelated target-file edits.
-mkdir -p "$work/expected/server/grants"
+mkdir -p "$work/expected/server/grants" "$work/expected/server/tokens"
 git -C "$work/expected" init -q
 git -C "$dex" show HEAD:server/grants/refresh.go > "$work/original-refresh.go"
 cp "$work/original-refresh.go" "$work/expected/server/grants/refresh.go"
+git -C "$dex" show HEAD:server/tokens/refresh_store.go > "$work/expected/server/tokens/refresh_store.go"
+git -C "$dex" show HEAD:server/tokens/refresh_store_test.go > "$work/expected/server/tokens/refresh_store_test.go"
+git -C "$dex" show HEAD:server/server_test.go > "$work/expected/server/server_test.go"
 git -C "$work/expected" apply "$here/dex-refresh-read-order.patch"
 git -C "$work/expected" apply "$here/dex-issue-10-independent-grants.patch"
 if cmp -s "$work/expected/server/grants/refresh.go" "$dex/server/grants/refresh.go" &&
