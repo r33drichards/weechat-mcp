@@ -10,7 +10,7 @@ COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-editable --no-cache
-COPY bridge.py native_buffer.py command_manifest.py weechat_mcp.py container_entrypoint.py mcp_events.py event_protocol.py event_webhooks.py LICENSE ./
+COPY bridge.py native_buffer.py command_manifest.py weechat_mcp.py container_entrypoint.py mcp_events.py jev_filter.py event_protocol.py event_webhooks.py LICENSE ./
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
 # Starts as root only to take ownership of an optional WEECHAT_HOME volume mount,
 # then permanently drops to the unprivileged weechat user before running anything.

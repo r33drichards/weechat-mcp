@@ -71,3 +71,91 @@ uv run --locked ty check --error-on-warning
 ```
 
 Deployment and live validation are separate approval steps. After deployment, rescan the plugin, explicitly subscribe a test chat to a selected test channel, verify a matching and non-matching event, then unsubscribe. Do not turn the sample workflow into startup automation.
+
+## Optional Jev preference filter (disabled by default)
+
+`trigger:"message"` already captures every eligible incoming IRC message. An
+optional `jev` argument now makes a separate send/drop decision for each captured
+message before its webhook is sent. Existing mention and all-message subscriptions
+without this argument are unchanged; upgrading never widens a grant.
+
+Operators must explicitly enable `JEV_FILTER_ENABLED=true` and inject `JEV_API_KEY`
+through their secret manager. Missing/invalid enabled configuration fails startup;
+no key is read when disabled. `JEV_MODEL` optionally overrides the default pinned
+`jev-1.14.0`. The endpoint is fixed to `https://api.typesafe.ai/v1/systemone`;
+subscribers cannot provide a URL, model, credential or system instruction.
+The image includes the adapter; no provider SDK is required.
+
+After the user authorizes disclosing this channel context to Typesafe, the host
+can explicitly subscribe with these event arguments:
+
+```json
+{
+  "channel_id": "irc.example.#project",
+  "trigger": "message",
+  "jev": {
+    "preference": "Forward questions for me and deployment failures; drop casual chat.",
+    "history_limit": 20
+  }
+}
+```
+
+The preference is user-controlled, nonblank, and at most 2,048 characters. It is
+scoped to the authenticated owner, callback/chat and channel subscription, never
+global. Changing it (or the history limit) creates a different subscription identity:
+unsubscribe the old exact argument set before creating its replacement, or both
+remain active. Refresh the exact same argument set to retain cursor/decisions.
+`jev` is accepted only with `trigger:"message"`; no nickname trigger is needed.
+
+Input to Jev is the current message, preference, and up to 20 preceding native
+channel chat lines by default (configurable 0–50, at most 32 KiB serialized prior
+context). History may include the user's own messages and pre-subscription lines,
+but not notices/status lines, other channels, future lines, webhook credentials or
+callback URLs. The candidate message itself must be eligible under the existing
+rules (so self messages still do not trigger). Snapshots reflect what WeeChat
+retained, not a complete archive. They are captured at intake and persisted with
+the event, so a backlog/retry does not acquire later context. Total provider
+requests are capped at 64 KiB; oversized input stops the grant rather than silently
+truncating the current message. Preferences/history are private runtime data with
+the same database/backups protections as existing event payloads.
+
+Jev receives untrusted IRC content as data, separately from the fixed decision
+instructions and user preference. Its only allowed result is `send` or `drop`.
+It cannot edit the message, call a tool, change the preference, change the target,
+or authorize an IRC write. Prompt boundaries reduce risk, but model judgments
+can still be mistaken; this is a relevance filter, not a security boundary.
+The webhook payload remains the original message only, never the surrounding
+history/preference/provider response.
+
+### Failure, cost and replay behavior
+
+- Each captured message for each opted-in subscription can incur a paid Jev call.
+  The operator controls the key/model and must approve provider disclosure and
+  costs before enabling. Tests use synthetic inputs and fake responses only.
+- At most eight subscriptions classify/deliver concurrently, with ordered
+  processing per subscription and the existing 10,000-event queue bound. Slow
+  classification does not block WeeChat intake. There is no automatic model retry.
+- The adapter has a five-second deadline, bounded HTTP response, validated public
+  HTTPS destination/TLS, no redirects/environment proxies, and strict JSON choice
+  parsing. Provider failures, rate limits, timeouts, missing configuration and
+  malformed results **suspend the grant** without forwarding or treating the error
+  as a semantic drop. Refresh reports the existing actionable `Delivery stopped`
+  error; explicitly unsubscribe/resubscribe to resume future-only intake.
+- A send/drop result commits before webhook delivery. Send retries and replay
+  reuse that decision and byte-exact payload; drop events never reach the callback
+  or reappear on replay. Dropped events advance the subscription cursor and are
+  pruned under the same 24-hour/10,000 settled-event retention as delivered events.
+- A crash before the decision commits can repeat a provider request (and cost),
+  but cannot forward without a committed send decision. Unsubscribe waits for an
+  already-started decision/send; expiry, revocation and channel scope are rechecked
+  before subsequent webhook I/O. No exactly-once provider-call guarantee is made.
+
+The SQLite change is additive (`filter_context` and `decision` columns). Back up
+the private runtime DB before upgrading. Do not run an older dispatcher against
+new filtered rows: it cannot interpret their decisions. Disable new grants and
+explicitly unsubscribe existing filtered grants before rollback. No deployment,
+provider credentials or live subscriptions are created by this PR.
+
+Primary API references: [Choice](https://docs.typesafe.ai/primitives/choice),
+[System One](https://docs.typesafe.ai/api/system-one),
+[models](https://docs.typesafe.ai/models).
