@@ -95,3 +95,17 @@ Decision: deployment authorized when ready; technical rollout gates still pendin
 
 Live gateway DIP/Claude route-renderer additions are preserved with regression
 tests for distinct private backends and the same owner-only authentication policy.
+
+## Issue #10 increment validation (2026-10-25, cuse agent, this repository)
+
+- Environment: linux/amd64, Go 1.27.3, CGO_ENABLED=1 (Nix gcc wrapper),
+  Dex v2.46.0 (05a27505) + read-order patch + dex-issue-10-independent-grants.patch.
+- Patch generated from and re-applied to a fresh clone: git apply --check and
+  apply both clean on top of the read-order patch.
+- go build ./server/... green; go test ./server/... green (17 packages);
+  go test ./storage/... green; run.sh tag set
+  'weechat_independent_grants weechat_shared_connector' green standalone and
+  combined with the existing acceptance tags; -race runs green.
+- Container/browser E2E (container_auth_test --refresh-flow, including the new
+  establish_independent third-browser scenario) requires Docker and runs in
+  CI; not executed locally here.
