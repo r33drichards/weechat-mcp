@@ -410,7 +410,7 @@ if 'refresh authority already locked' not in output:
             flow = (
                 RefreshFlow(
                     request, metadata, resource["resource"], AUTH, MCP
-                ).establish()
+                ).establish().establish_independent()
                 if args.refresh_flow
                 else None
             )
