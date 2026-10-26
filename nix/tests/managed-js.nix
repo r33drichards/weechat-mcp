@@ -10,7 +10,6 @@ in pkgs.testers.runNixOSTest {
     virtualisation.memorySize = 3072;
     # This globally classified address lives only on the isolated VM's loopback.
     # Production public-address validation is unchanged; no Internet is used.
-    networking.interfaces.lo.ipv4.addresses = [ { address = "93.184.216.34"; prefixLength = 32; } ];
     networking.hosts."93.184.216.34" = [ "fixture.test" "wrong.fixture.test" "outside.test" ];
     services.weechat-managed-js = {
       enable = true;
@@ -51,8 +50,12 @@ in pkgs.testers.runNixOSTest {
       wantedBy = [ "multi-user.target" ];
       before = [ "weechat-managed-js.service" ];
       after = [ "network.target" ];
-      path = [ pkgs.openssl pkgs.coreutils ];
+      path = [ pkgs.openssl pkgs.coreutils pkgs.iproute2 ];
       preStart = ''
+        # NixOS manages loopback specially; an interfaces.lo address declaration
+        # does not reliably create this alias. Assign it synchronously before
+        # either fixture listener binds, inside this isolated test VM only.
+        ip address replace 93.184.216.34/32 dev lo
         cd /run/managed-http
         openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
           -subj /CN=WeeChat-VM-test-CA -addext basicConstraints=critical,CA:TRUE \
@@ -88,6 +91,7 @@ in pkgs.testers.runNixOSTest {
     start_all()
     machine.wait_for_unit("managed-irc.service")
     machine.wait_for_unit("managed-http.service")
+    machine.succeed("${pkgs.iproute2}/bin/ip -4 address show dev lo | grep -F '93.184.216.34/32'")
     machine.wait_for_unit("weechat-managed-js.service")
     machine.wait_until_succeeds("test -S /run/weechat-managed-js/profile/mcp/bridge.sock")
     with subtest("actual managed and trusted JavaScript, independent policy and named source lifecycle"):
