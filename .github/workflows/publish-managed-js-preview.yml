@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Publish managed JavaScript PR image
+
+# This file and the publisher must land on the default branch before activation.
+# Never use pull_request_target or check out the triggering run's PR here.
+on:
+  workflow_run:
+    workflows: [Python checks]
+    types: [completed]
+
+permissions: {}
+
+# Serialize duplicate completions/reruns for one branch; never cancel a push.
+concurrency:
+  group: managed-js-preview-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+      pull-requests: write
+    steps:
+      - name: Check out trusted publisher code from this default-branch event
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install the registry copy client (no image execution)
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y skopeo
+      - name: Verify provenance, copy the tested image, and update its PR comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/publish_managed_js_preview.py

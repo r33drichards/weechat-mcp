@@ -109,12 +109,50 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Preview tags describe the PR head, not GitHub's synthetic merge.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Detect the optional managed image build
+        id: managed
+        shell: bash
+        run: |
+          if test -f flake.nix && test -f docker_managed_js_test.py; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "This head has no managed image build; skipping preview production."
+          fi
       - uses: cachix/install-nix-action@d9186cbdca7adedf113a159fa91f725a27866771 # v31
+        if: steps.managed.outputs.enabled == 'true'
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Build image with Nix, load it into Docker, and verify behavior offline
-        run: timeout 3500s python3 docker_managed_js_test.py
+      - name: Build the exact Nix image for smoke testing and publication
+        if: steps.managed.outputs.enabled == 'true'
+        run: |
+          timeout 3300s nix build --no-update-lock-file .#managed-js-image \
+            --out-link "$RUNNER_TEMP/managed-js-image"
+          docker load --input "$RUNNER_TEMP/managed-js-image"
+      - name: Verify the built image offline without rebuilding it
+        if: steps.managed.outputs.enabled == 'true'
+        run: timeout 120s python3 docker_managed_js_test.py --skip-build
+      - name: Stage the tested image for the trusted publisher
+        if: steps.managed.outputs.enabled == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          mkdir -p "$RUNNER_TEMP/managed-js-preview"
+          cp --reflink=auto --dereference "$RUNNER_TEMP/managed-js-image" \
+            "$RUNNER_TEMP/managed-js-preview/image.tar"
+      - name: Upload image bytes only; this job has no registry credentials
+        if: steps.managed.outputs.enabled == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: managed-js-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/managed-js-preview/image.tar
+          compression-level: 0
+          archive: true
+          if-no-files-found: error
+          retention-days: 3
 
   auth_topology:
     name: Patched Pomerium and Dex auth topology
