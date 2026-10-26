@@ -77,14 +77,25 @@ def main():
         return response["result"]
 
     def wait_message(text, after=0, seconds=30):
-        return eventually(
-            lambda: any(
-                item == {"target": "#test", "text": text}
-                for item in control("status")["messages"][after:]
-            ),
-            f"native IRC reply {text!r}",
-            seconds,
-        )
+        try:
+            return eventually(
+                lambda: any(
+                    item == {"target": "#test", "text": text}
+                    for item in control("status")["messages"][after:]
+                ),
+                f"native IRC reply {text!r}",
+                seconds,
+            )
+        except AssertionError as error:
+            # These bounded records contain only this isolated test's synthetic
+            # data. Preserve exact success/error assertions while making a DNS,
+            # transport, callback, or generation failure distinguishable in CI.
+            details = {
+                "received": control("status")["messages"][after:][-12:],
+                "http_hits": json.loads(args.http_state.read_text())[-12:],
+                "managed": call("status")["active"],
+            }
+            raise AssertionError(f"{error}; diagnostics: {details!r}") from error
 
     def send(text, expected):
         index = len(control("status")["messages"])
@@ -145,10 +156,10 @@ def main():
     time.sleep(0.5)
     no_forbidden_messages()
 
-    send("private-http", "http-error")
-    send("policy-http", "http-error")
-    send("dotpath", "http-error")
-    send("encoded-dotpath", "http-error")
+    send("private-http", "http-error:invalid_http_request:not_sent")
+    send("policy-http", "http-error:policy_denied:not_sent")
+    send("dotpath", "http-error:invalid_http_request:not_sent")
+    send("encoded-dotpath", "http-error:invalid_http_request:not_sent")
     assert not any(
         item["path"] == "/policy-denied"
         for item in json.loads(args.http_state.read_text())
@@ -165,7 +176,7 @@ def main():
         body = "payload" if method != "GET" else ""
         send("http-" + method.lower(), f"http:200:{method}:{body}")
     send("redirect", "http:302:")
-    send("large", "http-error")
+    send("large", "http-error:transport_failed:failed")
     hits = json.loads(args.http_state.read_text())
     assert not any(item["trap"] for item in hits), hits
     assert not any("/admin" in item["path"] for item in hits), hits
@@ -177,7 +188,7 @@ def main():
         "DELETE",
     ], hits
     send("tls", "http:200:GET:")
-    send("tls-wrong-host", "http-error")
+    send("tls-wrong-host", "http-error:transport_failed:failed")
     tls_hits = [
         item
         for item in json.loads(args.http_state.read_text())
