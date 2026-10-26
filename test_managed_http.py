@@ -4,9 +4,11 @@
 import json
 import socket
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import managed_http as http
+import weechat_mcp
 
 URL = "https://public.example.test/path?x=1"
 PUBLIC = "93.184.216.34"
@@ -303,6 +305,33 @@ class NativeHTTPTests(unittest.TestCase):
             ],
         )
         self.assertFalse(self.client.pending)
+
+    def test_registered_url_callback_accepts_native_four_argument_abi(self):
+        # The pinned Python binding invokes hook_url callbacks with "sshh":
+        # data, URL, request options, response output. Exercise the registered
+        # module-level wrapper, not just NativeHTTP.url_done's internal API.
+        api = SimpleNamespace(w=self.w, managed=SimpleNamespace(http=self.client))
+        self.client.request(1, "GET", URL)
+        self.resolve()
+        url, options, _timeout, callback, data = self.w.urls[-1]
+        output = {
+            "response_code": "200",
+            "output": "native-response",
+            "headers": "Content-Type: text/plain\r\nContent-Length: 15\r\n",
+        }
+        with patch.object(weechat_mcp, "api", api):
+            result = getattr(weechat_mcp, callback)(data, url, options, output)
+        self.assertEqual(result, self.w.WEECHAT_RC_OK)
+        self.assertEqual(self.results[0]["result"]["body"], "native-response")
+        self.assertFalse(self.client.pending)
+
+        # A late callback after adapter shutdown is harmless but keeps the same
+        # native ABI and return code.
+        api.managed = None
+        with patch.object(weechat_mcp, "api", api):
+            result = getattr(weechat_mcp, callback)(data, url, options, output)
+        self.assertEqual(result, self.w.WEECHAT_RC_OK)
+        self.assertEqual(len(self.results), 1)
 
     def test_every_dns_answer_checked_again_in_parent(self):
         for records in (
