@@ -20,7 +20,7 @@ or upgrades an existing service.
 | --- | --- |
 | Existing loader, legacy V8 isolate and APIs retained | Separate isolate per active generation |
 | Operator-controlled source and configuration | Only named source files under a dedicated writable root |
-| Native process, configuration and command APIs remain available | Four typed bindings; default-deny native policy before effects |
+| Native process, configuration and command APIs remain available | Typed bindings and bounded timers; default-deny native policy before effects |
 | Not subject to the managed policy | Cannot modify policy, claim trusted identity or call the legacy API |
 
 **No global no-exec/seccomp or Landlock filter is installed.** That would change
@@ -161,7 +161,7 @@ weechat.onMessage(({ buffer, nick, text }) => {
 });
 ```
 
-The entire exposed host object is:
+The exposed `weechat` host object is:
 
 - `onMessage(function)` — receives data from exposed native IRC **channel**
   `irc_privmsg` lines, excluding own messages; policy also gates event intake.
@@ -185,6 +185,69 @@ isolates. SharedArrayBuffer, Atomics and WebAssembly are also removed from the
 managed globals; this initial API does not support their blocking/shared-memory
 paths. Trusted native hooks/modifiers remain trusted and can still affect IRC
 processing; this does not make intentionally privileged trusted plugins safe.
+
+## Managed timers
+
+Managed isolates also expose four globals:
+
+- `setTimeout(callback, delayMs)` — schedule one callback and return an opaque
+  string handle.
+- `setInterval(callback, intervalMs)` — schedule repeated callbacks and return
+  an opaque string handle.
+- `clearTimeout(handle)` and `clearInterval(handle)` — cancel either kind of
+  timer owned by this generation. Clearing an unknown, completed or already
+  cleared string handle is a no-op; handles cannot cancel another generation's
+  timers.
+
+Callbacks must be functions; delays must be integer numbers between **100 and
+2,147,483,647 milliseconds**, inclusive. There is no implicit string/numeric
+coercion, omitted-delay default, extra callback-argument forwarding or string
+code evaluation. Each generation may hold at most **eight live timers**, with at
+most **16 timer registration/cancellation intents per turn**. Clear operations require one string
+handle of at most 48 UTF-8 bytes without NUL characters.
+These are not Node.js timer objects: there is no `ref`, `unref` or Promise-based
+sleep API.
+
+```js
+const heartbeat = setInterval(() => {
+  weechat.send("irc.managed.#wchat", "heartbeat");
+}, 60_000);
+
+weechat.onMessage(({ text }) => {
+  if (text === "!stop-heartbeat") clearInterval(heartbeat);
+});
+```
+
+Timer registration is allowed during candidate evaluation, but it installs no
+native hook until successful activation. Validation alone never starts timers;
+a rejected candidate leaves the running generation unchanged. Registrations
+and cancellations made during an active callback are committed only if that
+turn succeeds; a failed turn discards its timer changes along with its queued
+effects. A successful hot-swap cancels the old generation's native hooks and
+queued timer callbacks. Unload or deadline retirement also cancels them; stale
+callbacks never acquire the replacement generation's identity.
+
+Timers use native WeeChat `hook_timer` with no second alignment, `max_calls=1`
+for a timeout and `max_calls=0` for an interval. Native hooks enqueue work;
+they do not run JavaScript reentrantly. Each timer has at most one queued
+callback, so repeated native ticks while it is pending coalesce rather than
+creating an unbounded backlog. Timer callbacks share the existing dispatch
+queue, per-generation callback rate and **50 ms execution deadline**, including
+microtasks. A timer does not grant send, HTTP or logging permission: effects
+still cross the same independent policy checks and resource limits.
+
+Delays are scheduling requests, not precise deadlines or delivery guarantees.
+WeeChat runs timers on its event loop and may catch up missed native intervals
+on later loop iterations; it can also reinitialize timers after a detected
+system-clock jump. The managed queue can delay or coalesce callbacks further.
+These timers are **in-memory only**, not durable cron jobs: process restart,
+unload or script replacement loses them and reload evaluates the new script
+from scratch.
+
+The pinned implementation details are in
+[`hook_timer_exec`](https://github.com/r33drichards/weechat/blob/b457688b41e429372a3dac64efd2534fdf4b2f73/src/core/hook/hook-timer.c)
+and
+[`unhook`](https://github.com/r33drichards/weechat/blob/b457688b41e429372a3dac64efd2534fdf4b2f73/src/core/core-hook.c).
 
 ## Independent policy and public-only HTTP
 

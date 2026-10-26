@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
@@ -41,6 +42,9 @@ constexpr size_t EFFECT_LIMIT = 4;
 constexpr size_t PLUGIN_LIMIT = 8;
 constexpr size_t QUEUE_LIMIT = 32;
 constexpr size_t HTTP_LIMIT = 2;
+constexpr size_t TIMER_LIMIT = 8;
+constexpr size_t TIMER_INTENT_LIMIT = 16;
+constexpr int TIMER_MIN_MS = 100;
 constexpr int DEADLINE_MS = 50;
 std::string managed_root;
 int managed_root_fd = -1;
@@ -49,6 +53,24 @@ bool enabled = false;
 bool ticking = false;
 uint64_t next_generation = 0;
 uint64_t next_request = 0;
+uint64_t next_timer = 0;
+struct NativeTimer {
+    std::string name, id;
+    uint64_t generation;
+    t_hook *hook = nullptr;
+    bool retired = false;
+    bool repeat = false;
+};
+std::map<std::string, std::unique_ptr<NativeTimer>> native_timers;
+int managed_timer(const void *, void *, int);
+void cleanup_timers() {
+    for (auto it = native_timers.begin(); it != native_timers.end();) {
+        auto &entry = *it->second;
+        if (!entry.retired && entry.hook) { ++it; continue; }
+        if (entry.hook) weechat_unhook(entry.hook);
+        it = native_timers.erase(it);
+    }
+}
 Clock::time_point next_candidate;
 std::deque<Clock::time_point> send_times;
 std::deque<Clock::time_point> log_times;
@@ -224,6 +246,13 @@ struct Pending {
     bool completed = false;
 };
 
+struct Scheduled {
+    Global<Function> callback;
+    std::string buffer;
+    int delay;
+    bool repeat, queued = false, due = false;
+};
+
 class Managed {
     ArrayBuffer::Allocator *allocator = nullptr;
     Isolate *isolate = nullptr;
@@ -241,6 +270,7 @@ public:
     bool active = true;
     std::deque<Job> jobs;
     std::map<std::string, Pending> pending;
+    std::map<std::string, Scheduled> timers;
 
     Managed(std::string id, std::string revision) : name(std::move(id)), digest(std::move(revision)), generation(++next_generation) {
         // Reuse the existing plugin's single-threaded V8 platform, not Node.js.
@@ -262,6 +292,11 @@ public:
         for (const auto &[key, callback] : bindings)
             api->Set(isolate, key, FunctionTemplate::New(isolate, callback, External::New(isolate, this)),
                      static_cast<PropertyAttribute>(ReadOnly | DontDelete));
+        for (const auto &[key, callback] : std::vector<std::pair<const char *, FunctionCallback>>{
+                 {"setTimeout", set_timeout}, {"setInterval", set_interval},
+                 {"clearTimeout", clear_timer}, {"clearInterval", clear_timer}})
+            global->Set(isolate, key, FunctionTemplate::New(isolate, callback, External::New(isolate, this)),
+                        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
         global->Set(isolate, "weechat", api, static_cast<PropertyAttribute>(ReadOnly | DontDelete));
         auto ctx = Context::New(isolate, nullptr, global);
         context.Reset(isolate, ctx);
@@ -291,6 +326,7 @@ public:
             request.callback.Reset();
         }
         pending.clear();
+        while (!timers.empty()) cancel_timer(timers.begin()->first);
     }
 
     bool authorize(const std::string &operation, const std::string &buffer, const std::string &request) const {
@@ -334,6 +370,7 @@ public:
         if (!ok) {
             for (const auto &effect : effects) {
                 if (effect.operation == "http.request") pending.erase(effect.id);
+                if (effect.operation == "timer.start") cancel_timer(effect.id);
             }
             effects.clear();
         }
@@ -358,7 +395,10 @@ public:
     }
 
     void turn() {
-        if (!active || jobs.empty()) return;
+        if (!active) return;
+        for (auto &[id, entry] : timers)
+            if (entry.due && !entry.queued) timer_ready(id);
+        if (jobs.empty()) return;
         auto now = Clock::now();
         while (!invocations.empty() && now - invocations.front() >= std::chrono::seconds(1)) invocations.pop_front();
         if (invocations.size() >= 20) return;
@@ -376,6 +416,15 @@ public:
                 for (const auto &[key, text] : std::map<std::string, std::string>{{"buffer", job.buffer}, {"nick", job.nick}, {"text", job.text}})
                     if (!value->Set(ctx, String::NewFromUtf8(isolate, key.c_str()).ToLocalChecked(), String::NewFromUtf8(isolate, text.c_str()).ToLocalChecked()).FromMaybe(false)) return false;
                 argument = value;
+            } else if (job.kind == "timer") {
+                auto found = timers.find(job.id);
+                if (found == timers.end()) return true;
+                callback = found->second.callback.Get(isolate);
+                found->second.queued = false;
+                found->second.due = false;
+                if (!found->second.repeat) cancel_timer(job.id);
+                Local<Value> result;
+                return callback->Call(ctx, Undefined(isolate), 0, nullptr).ToLocal(&result);
             } else {
                 auto found = pending.find(job.id);
                 if (found == pending.end()) return true;
@@ -396,16 +445,74 @@ public:
         }
     }
 
+    bool start_timers() { return drain(); }
+
+    void timer_ready(const std::string &id) {
+        auto found = timers.find(id);
+        if (!active || found == timers.end() || found->second.queued) return;
+        // Coalesce while pending, retaining a due marker when the queue is
+        // full so even a one-shot can be enqueued by a later dispatch tick.
+        found->second.due = true;
+        if (jobs.size() >= QUEUE_LIMIT) return;
+        found->second.queued = true;
+        jobs.push_back({"timer", found->second.buffer, "", "", id});
+    }
+
     void completion(const std::string &id, const std::string &json) {
         auto found = pending.find(id);
         if (found != pending.end() && !found->second.completed && active) {
             found->second.completed = true;
-            if (jobs.size() >= QUEUE_LIMIT) jobs.pop_back();
+            if (jobs.size() >= QUEUE_LIMIT) discard_last_job();
             jobs.push_front({"http", found->second.buffer, "", json, id});
         }
     }
 
 private:
+    void discard_last_job() {
+        const auto &job = jobs.back();
+        if (job.kind == "timer") {
+            // Keep the due marker so queue eviction can be retried.
+            auto found = timers.find(job.id);
+            if (found != timers.end()) found->second.queued = false;
+        }
+        jobs.pop_back();
+    }
+    void cancel_timer(const std::string &id) {
+        auto native = native_timers.find(id);
+        if (native != native_timers.end()) native->second->retired = true;
+        timers.erase(id);
+    }
+    static void schedule(const FunctionCallbackInfo<Value> &args, bool repeat) {
+        auto *self = identity(args);
+        if (!self || args.Length() != 2 || !args[0]->IsFunction() || !args[1]->IsNumber() ||
+            self->timers.size() >= TIMER_LIMIT || self->timer_effect_count() >= TIMER_INTENT_LIMIT) {
+            fail(args, "invalid_timer_or_limit"); return;
+        }
+        double delay = args[1].As<Number>()->Value();
+        if (!std::isfinite(delay) || delay < TIMER_MIN_MS || delay > 2147483647 || std::floor(delay) != delay) {
+            fail(args, "invalid_timer_delay"); return;
+        }
+        std::string id = std::to_string(self->generation) + ":" + std::to_string(++next_timer);
+        Scheduled entry;
+        entry.callback.Reset(args.GetIsolate(), args[0].As<Function>());
+        entry.buffer = self->current_buffer;
+        entry.delay = static_cast<int>(delay);
+        entry.repeat = repeat;
+        self->timers.emplace(id, std::move(entry));
+        Effect effect; effect.operation = "timer.start"; effect.id = id;
+        self->effects.push_back(std::move(effect));
+        args.GetReturnValue().Set(String::NewFromUtf8(args.GetIsolate(), id.c_str()).ToLocalChecked());
+    }
+    static void set_timeout(const FunctionCallbackInfo<Value> &args) { schedule(args, false); }
+    static void set_interval(const FunctionCallbackInfo<Value> &args) { schedule(args, true); }
+    static void clear_timer(const FunctionCallbackInfo<Value> &args) {
+        auto *self = identity(args);
+        Effect effect; effect.operation = "timer.cancel";
+        if (!self || args.Length() != 1 || !text(args, 0, effect.id, 48) || self->timer_effect_count() >= TIMER_INTENT_LIMIT) {
+            fail(args, "invalid_timer_handle_or_limit"); return;
+        }
+        self->effects.push_back(std::move(effect));
+    }
     static Managed *identity(const FunctionCallbackInfo<Value> &args) {
         if (!args.Data()->IsExternal()) return nullptr;
         auto *self = static_cast<Managed *>(args.Data().As<External>()->Value());
@@ -423,8 +530,13 @@ private:
         out.assign(*value, static_cast<size_t>(value.length()));
         return out.find('\0') == std::string::npos;
     }
+    size_t timer_effect_count() const {
+        return std::count_if(effects.begin(), effects.end(), [](const Effect &effect) {
+            return effect.operation == "timer.start" || effect.operation == "timer.cancel";
+        });
+    }
     static bool effects_ok(Managed *self) {
-        return self && !self->staging && self->effects.size() < EFFECT_LIMIT;
+        return self && !self->staging && self->effects.size() - self->timer_effect_count() < EFFECT_LIMIT;
     }
     static void on_message(const FunctionCallbackInfo<Value> &args) {
         auto *self = identity(args);
@@ -470,11 +582,27 @@ private:
         if (effect.operation == "http.request")
             completion(effect.id, "{\"id\":" + quote(effect.id) + ",\"error\":" + quote(code) + ",\"outcome\":\"not_sent\"}");
     }
-    void drain() {
+    bool drain() {
+        bool timers_started = true;
         std::vector<Effect> work; work.swap(effects);
         for (const auto &effect : work) {
             if (!enabled || !active) break;
-            if (effect.operation == "http.request") {
+            if (effect.operation == "timer.cancel") {
+                // Only this immutable generation's map confers ownership.
+                if (timers.contains(effect.id)) cancel_timer(effect.id);
+            } else if (effect.operation == "timer.start") {
+                auto found = timers.find(effect.id);
+                if (found == timers.end()) continue;
+                auto token = std::make_unique<NativeTimer>();
+                token->name = name; token->id = effect.id; token->generation = generation;
+                token->repeat = found->second.repeat;
+                // Core owns/frees callback_data: our token is callback_pointer,
+                // held until unhook, and callback_data stays null.
+                token->hook = weechat_hook_timer(found->second.delay, 0, found->second.repeat ? 0 : 1,
+                                                 &managed_timer, token.get(), nullptr);
+                if (!token->hook) { cancel_timer(effect.id); timers_started = false; continue; }
+                native_timers.emplace(effect.id, std::move(token));
+            } else if (effect.operation == "http.request") {
                 auto values = host("mcp_managed_http_validate", {{"method", effect.method}, {"url", effect.url}, {"body", effect.body}});
                 if (values["ok"] != "1") { denied(effect, "invalid_http_request"); continue; }
                 // The trusted adapter must return exact method/body and a
@@ -508,10 +636,26 @@ private:
                 }
             }
         }
+        return timers_started;
     }
 };
 
 std::map<std::string, std::shared_ptr<Managed>> plugins;
+
+int managed_timer(const void *pointer, void *, int) {
+    try {
+        auto *token = static_cast<const NativeTimer *>(pointer);
+        auto native = native_timers.find(token->id);
+        if (native == native_timers.end()) return WEECHAT_RC_OK;
+        // Core auto-unhooks a one-shot after this callback returns. Never unhook
+        // that stale pointer later, and never execute JS inside a core timer hook.
+        if (!token->repeat) native->second->hook = nullptr;
+        auto owner = plugins.find(token->name);
+        if (enabled && !token->retired && owner != plugins.end() && owner->second->generation == token->generation)
+            owner->second->timer_ready(token->id);
+    } catch (...) { /* Never unwind through the native C event loop. */ }
+    return WEECHAT_RC_OK;
+}
 
 t_hashtable *manager(const void *, void *, const char *operation, t_hashtable *input) {
     try {
@@ -555,11 +699,19 @@ t_hashtable *manager(const void *, void *, const char *operation, t_hashtable *i
         if (!candidate->load(source)) return table({{"error", "candidate_rejected"}});
         std::string generation = std::to_string(candidate->generation);
         if (op == "javascript_managed_activate") {
+            // hook_timer registration does not invoke callbacks. Arm the candidate
+            // before swapping; allocation failure must preserve the last good generation.
+            if (!candidate->start_timers()) {
+                candidate->retire();
+                cleanup_timers();
+                return table({{"error", "candidate_timer_failed"}});
+            }
             auto found = plugins.find(name);
             std::shared_ptr<Managed> previous;
             if (found != plugins.end()) { previous = std::move(found->second); plugins.erase(found); }
-            plugins.emplace(name, std::move(candidate));
+            plugins.emplace(name, candidate);
             previous.reset();
+            cleanup_timers();
         }
         return table({{"ok", "1"}, {"digest", digest}, {"generation", generation}});
     } catch (...) { return table({{"error", "managed_failure"}}); }
@@ -569,6 +721,7 @@ int timer(const void *, void *, int) {
     if (ticking) return WEECHAT_RC_OK;
     ticking = true;
     try {
+        cleanup_timers();
         // Deferred cancellations cannot re-enter object destruction/activation.
         for (int count = 0; enabled && !cancellations.empty() && count < 4; ++count) {
             std::string id = std::move(cancellations.front());
@@ -653,6 +806,8 @@ bool weechat_js_managed_init() {
 
 void weechat_js_managed_end() {
     enabled = false;
+    for (auto &[id, token] : native_timers) { (void)id; token->retired = true; }
+    cleanup_timers();
     auto removed = std::move(plugins);
     plugins.clear();
     for (auto &[name, plugin] : removed) { (void)name; plugin->retire(); }

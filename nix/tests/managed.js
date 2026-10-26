@@ -13,6 +13,40 @@ weechat.onMessage(function (event) {
     };
     if (text === "ping") {
         weechat.send(buffer, "v1:pong");
+    } else if (text === "timer-once") {
+        setTimeout(function () { weechat.send(buffer, "timer:once"); }, 100);
+    } else if (text === "timer-interval") {
+        let count = 0;
+        const handle = setInterval(function () {
+            count += 1;
+            weechat.send(buffer, "timer:interval:" + count);
+            // Both clear functions accept either kind of opaque timer handle.
+            if (count === 2) clearTimeout(handle);
+        }, 500);
+    } else if (text === "timer-cancel") {
+        const handle = setTimeout(function () {
+            weechat.send(buffer, "forbidden-canceled-timer");
+        }, 500);
+        clearInterval(handle);
+        clearTimeout(handle);
+        clearTimeout("unknown-timer");
+        weechat.send(buffer, "timer:canceled");
+    } else if (text === "timer-stale") {
+        setTimeout(function () {
+            weechat.send(buffer, "forbidden-stale-timer");
+        }, 3000);
+        weechat.send(buffer, "timer:armed");
+    } else if (text === "timer-policy") {
+        setTimeout(function () {
+            weechat.send("irc.managed.#outside", "forbidden-timer-policy");
+            weechat.send(buffer, "timer:policy-checked");
+        }, 100);
+    } else if (text === "timer-loop") {
+        setTimeout(function () { while (true) {} }, 100);
+    } else if (text === "timer-microtask-loop") {
+        setTimeout(function () {
+            Promise.resolve().then(function () { while (true) {} });
+        }, 100);
     } else if (text === "deny") {
         const missing = [
             typeof weechat.command,

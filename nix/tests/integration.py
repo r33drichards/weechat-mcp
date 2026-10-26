@@ -143,6 +143,55 @@ def main():
     assert "#not-joined" not in control("status")["channels"]
     send("literal", "literal:${process.env.HOME};weechat.command('/quit')")
 
+    # Actual native timer delivery is serialized through the managed dispatcher.
+    # Allow the global send budget to recover before counting asynchronous replies.
+    time.sleep(1.1)
+    send("timer-once", "timer:once")
+    time.sleep(0.6)
+    assert (
+        sum(item["text"] == "timer:once" for item in control("status")["messages"]) == 1
+    )
+    index = len(control("status")["messages"])
+    control("send", text="timer-interval")
+    wait_message("timer:interval:1", index)
+    wait_message("timer:interval:2", index)
+    time.sleep(1.1)
+    assert [
+        item["text"]
+        for item in control("status")["messages"][index:]
+        if item["text"].startswith("timer:interval:")
+    ] == ["timer:interval:1", "timer:interval:2"]
+    send("timer-cancel", "timer:canceled")
+    time.sleep(0.7)
+    send("timer-policy", "timer:policy-checked")
+    no_forbidden_messages()
+
+    # Validation may create timer declarations but must never arm their hooks.
+    staged_timer = write(
+        'setTimeout(() => weechat.send("irc.managed.#test", "timer:startup"), 100);\n'
+        + source,
+        digest,
+    )
+    index = len(control("status")["messages"])
+    call("validate", {"name": "example", "digest": staged_timer})
+    time.sleep(0.6)
+    assert not any(
+        item["text"] == "timer:startup"
+        for item in control("status")["messages"][index:]
+    )
+    call("activate", {"name": "example", "digest": staged_timer})
+    wait_message("timer:startup", index)
+    time.sleep(0.6)
+    assert (
+        sum(
+            item["text"] == "timer:startup"
+            for item in control("status")["messages"][index:]
+        )
+        == 1
+    )
+    digest = write(source, staged_timer)
+    activate(digest)
+
     # Named management never grants filesystem/policy-administration authority.
     for name in ("../policy", "/etc/passwd", "example.js", "..", "policy/data"):
         call("read", {"name": name}, error=True)
@@ -231,6 +280,7 @@ def main():
     before = sum(
         item["path"] == "/slow" for item in json.loads(args.http_state.read_text())
     )
+    send("timer-stale", "timer:armed")
     control("send", text="slow")
     eventually(
         lambda: (
@@ -264,9 +314,15 @@ def main():
     send("trusted-process", "trusted:process:trusted-process-ok")
 
     # Runaway managed execution/microtasks retire only that managed generation.
-    for trigger in ("loop", "microtask-loop"):
+    for trigger in ("loop", "microtask-loop", "timer-loop", "timer-microtask-loop"):
         control("send", text=trigger)
-        time.sleep(0.3)
+        eventually(
+            lambda: any(
+                item["name"] == "example" and not item["active"]
+                for item in call("status")["active"]
+            ),
+            f"managed generation retired after {trigger}",
+        )
         send("trusted-ping", "trusted:pong")
         send("trusted-process", "trusted:process:trusted-process-ok")
         replacement = write(source.replace("v1:pong", "recovered:pong"), replacement)
@@ -274,7 +330,7 @@ def main():
         send("ping", "recovered:pong")
     no_forbidden_messages()
     print(
-        "PASS: actual mixed-trust V8/IRC/native HTTP/TLS, named hot reload, independent policy, trusted compatibility"
+        "PASS: actual mixed-trust V8/IRC/native timers/HTTP/TLS, named hot reload, independent policy, trusted compatibility"
     )
 
 
