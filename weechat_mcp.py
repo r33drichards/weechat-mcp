@@ -493,7 +493,9 @@ def managed_dns_done(data, command, return_code, out, err):
     return api.w.WEECHAT_RC_OK
 
 
-def managed_url_done(data, url, output):
+def managed_url_done(data, url, options, output):
+    # Native hook_url callbacks receive both the request options and response.
+    # Only the response is passed to the controller; options are host-owned.
     assert api is not None
     if api.managed is not None:
         api.managed.http.url_done(data, url, output)
