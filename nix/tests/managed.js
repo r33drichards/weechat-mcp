@@ -5,7 +5,7 @@ weechat.onMessage(function (event) {
     const text = event.text;
     const reply = function (message) {
         if (message.error) {
-            weechat.send(buffer, "http-error");
+            weechat.send(buffer, "http-error:" + message.error + ":" + message.outcome);
         } else {
             const result = message.result;
             weechat.send(buffer, "http:" + result.status + ":" + result.body);
