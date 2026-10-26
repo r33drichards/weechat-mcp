@@ -2,15 +2,27 @@
 """Packaging configuration/security and supervisor cleanup regressions."""
 
 import asyncio
+import os
 import stat
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from bridge import create_server, http_settings
-from container_entrypoint import configuration, home, initialize_home, stop
+from container_entrypoint import (
+    MANAGED_BINARY,
+    MANAGED_PLUGIN_DIR,
+    configuration,
+    home,
+    initialize_home,
+    initialize_managed_root,
+    managed_settings,
+    run,
+    stop,
+    weechat_command,
+)
 
 PRIVATE_ENV = {
     "MCP_AUTH_MODE": "railway-private",
@@ -33,11 +45,156 @@ class ConfigurationTests(unittest.TestCase):
             "native_buffer.py",
             "command_manifest.py",
             "container_entrypoint.py",
+            "managed_js.py",
+            "managed_http.py",
         ):
             with self.subTest(name=name):
                 self.assertIn("!" + name, rules)
                 self.assertTrue((root / name).is_file())
                 self.assertIn(name, dockerfile)
+
+    def test_managed_build_uses_authoritative_nix_without_replacing_default(self):
+        root = Path(__file__).parent
+        dockerfile = (root / "Dockerfile").read_text()
+        rules = (root / ".dockerignore").read_text().splitlines()
+        self.assertTrue(dockerfile.rstrip().endswith("FROM standard AS default"))
+        self.assertIn("FROM standard AS managed-js", dockerfile)
+        self.assertIn(".#weechat-managed-container", dockerfile)
+        self.assertIn("nix-store --query --requisites /managed-result", dockerfile)
+        self.assertIn("COPY --from=managed-build /closure/ /", dockerfile)
+        self.assertNotIn("cmake ", dockerfile)
+        self.assertNotIn("LD_PRELOAD", dockerfile)
+        self.assertNotIn("safe_tcl", dockerfile)
+        for name in (
+            "flake.nix",
+            "flake.lock",
+            "policy/Cargo.toml",
+            "policy/Cargo.lock",
+            "policy/managed.rego",
+            "policy/example-data.json",
+            "native/weechat-js-managed.cpp",
+            "native/weechat-js-managed.h",
+        ):
+            with self.subTest(name=name):
+                self.assertIn("!" + name, rules)
+                self.assertTrue((root / name).is_file())
+
+    def test_nix_output_builds_an_actual_image_with_locked_python_dependencies(self):
+        root = Path(__file__).parent
+        image = (root / "nix/image.nix").read_text()
+        python = (root / "nix/python-env.nix").read_text()
+        self.assertIn("dockerTools.buildLayeredImage", image)
+        self.assertIn('tag = "managed-js-nix"', image)
+        self.assertIn("${bridgeEnv}/bin/python", image)
+        self.assertIn('version("fastmcp") == "4.1.0"', image)
+        self.assertIn('version("mcp") == "2.3.0"', image)
+        self.assertIn("WEECHAT_MANAGED_POLICY=${sourceRoot}/policy/managed.rego", image)
+        self.assertIn("WEECHAT_MANAGED_DATA=${policyData}", image)
+        self.assertIn("uv2nix.lib.workspace.loadWorkspace", python)
+        self.assertIn("workspace.deps.default", python)
+        self.assertNotIn("uv sync", image + python)
+
+    def test_managed_default_keeps_stock_launch_and_trusted_profile_semantics(self):
+        self.assertIsNone(managed_settings({}))
+        self.assertIsNone(managed_settings({"WEECHAT_MCP_MANAGED_JS": "0"}))
+        self.assertIsNone(managed_settings({"WEECHAT_HOME": "/persistent"}))
+        self.assertEqual(
+            weechat_command("/profile", ["/connect docker"]),
+            [
+                "weechat-headless",
+                "-d",
+                "/profile",
+                "-p",
+                "--stdout",
+                "-r",
+                "/connect docker",
+            ],
+        )
+        managed = weechat_command("/profile", [], managed=True)
+        self.assertEqual(managed, [MANAGED_BINARY, "-d", "/profile", "-p", "--stdout"])
+        self.assertNotIn("-a", managed)
+        self.assertNotIn("-s", managed)
+
+    def test_managed_settings_restrict_mcp_and_separate_authority_from_sources(self):
+        valid = {
+            "WEECHAT_MCP_MANAGED_JS": "1",
+            "WEECHAT_MCP_FULL_CONTROL": "0",
+            "WEECHAT_MANAGED_ROOT": "/data/managed",
+            "WEECHAT_MANAGED_POLICY": "/etc/weechat-managed/managed.rego",
+            "WEECHAT_MANAGED_DATA": "/etc/weechat-managed/data.json",
+            "WEECHAT_HOME": "/data/weechat",
+        }
+        self.assertEqual(managed_settings(valid)["root"], Path("/data/managed"))
+        for key, value in (
+            ("WEECHAT_MCP_MANAGED_JS", "true"),
+            ("WEECHAT_MCP_FULL_CONTROL", "1"),
+            ("WEECHAT_MCP_FULL_CONTROL", ""),
+            ("WEECHAT_MANAGED_ROOT", "relative"),
+            ("WEECHAT_MANAGED_ROOT", "/data/../managed"),
+            ("WEECHAT_MANAGED_ROOT", "/app/python/autoload"),
+            ("WEECHAT_MANAGED_ROOT", "/usr/local/lib"),
+            ("WEECHAT_MANAGED_ROOT", "/nix/store/runtime"),
+            ("WEECHAT_MANAGED_ROOT", "/etc/managed-sources"),
+            ("WEECHAT_MANAGED_ROOT", "/opt/weechat-managed/lib"),
+            ("WEECHAT_MANAGED_ROOT", "/data/weechat/javascript/autoload"),
+            ("WEECHAT_MANAGED_ROOT", "/data"),
+            ("WEECHAT_MANAGED_POLICY", "/data/managed/policy.rego"),
+            ("WEECHAT_MANAGED_DATA", "/data/managed/data.json"),
+            ("WEECHAT_MANAGED_POLICY", "relative.rego"),
+        ):
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                managed_settings({**valid, key: value})
+        for key in (
+            "WEECHAT_MCP_FULL_CONTROL",
+            "WEECHAT_MANAGED_ROOT",
+            "WEECHAT_MANAGED_POLICY",
+            "WEECHAT_MANAGED_DATA",
+        ):
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                managed_settings({k: v for k, v in valid.items() if k != key})
+
+    def test_managed_loads_matching_plugins_before_mcp(self):
+        commands = configuration(
+            {"IRC_HOST": "irc.example.org", "WEECHAT_MCP_MANAGED_JS": "1"}
+        )
+        self.assertEqual(
+            commands[:3],
+            [
+                "/plugin load " + MANAGED_PLUGIN_DIR + "/" + name + ".so"
+                for name in ("irc", "python", "javascript")
+            ],
+        )
+        self.assertTrue(commands[3].endswith("/weechat_mcp.py"))
+        self.assertEqual(commands[-1], "/connect docker")
+
+    def test_managed_root_private_initialization_rejects_links_and_writable_roots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "managed"
+            initialize_managed_root(root)
+            self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+            root.chmod(0o777)
+            with self.assertRaisesRegex(ValueError, "permissions"):
+                initialize_managed_root(root)
+            root.chmod(0o700)
+            link = Path(temporary) / "link"
+            link.symlink_to(root, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "symbolic links"):
+                initialize_managed_root(link)
+
+    def test_invalid_managed_mode_fails_before_privileges_storage_or_children(self):
+        with (
+            patch.dict(os.environ, {"WEECHAT_MCP_MANAGED_JS": "1"}, clear=True),
+            patch("container_entrypoint.initialize_home") as profile,
+            patch("container_entrypoint.initialize_managed_root") as sources,
+            patch("container_entrypoint.drop_privileges") as privileges,
+            patch("container_entrypoint.subprocess.Popen") as spawn,
+            self.assertRaisesRegex(ValueError, "FULL_CONTROL"),
+        ):
+            run()
+        profile.assert_not_called()
+        sources.assert_not_called()
+        privileges.assert_not_called()
+        spawn.assert_not_called()
 
     def test_defaults_tls_scope(self):
         commands = configuration({"IRC_HOST": "irc.example.org"})
@@ -188,6 +345,42 @@ class ConfigurationTests(unittest.TestCase):
         child.poll.return_value = 0
         stop(child)
         child.terminate.assert_not_called()
+
+
+class ManagedImageSmokeTests(unittest.TestCase):
+    def test_embedded_probe_and_harness_compile(self):
+        from docker_managed_js_test import HARNESS, PROBE
+
+        compile(PROBE, "<embedded WeeChat probe>", "exec")
+        compile("PROBE = " + repr(PROBE) + "\n" + HARNESS, "<image harness>", "exec")
+
+    def test_nix_image_build_load_and_explicit_compatibility_paths(self):
+        import docker_managed_js_test as smoke
+
+        for args, executable in (
+            ([], "nix"),
+            (["--dockerfile"], "docker"),
+            (["--skip-build"], "docker"),
+        ):
+            with (
+                self.subTest(args=args),
+                patch("sys.argv", ["docker_managed_js_test.py", *args]),
+                patch.object(smoke.subprocess, "run") as execute,
+                patch("builtins.print"),
+            ):
+                smoke.main()
+                self.assertEqual(execute.call_args_list[0].args[0][0], executable)
+                if not args:
+                    self.assertIn(
+                        ".#managed-js-image", execute.call_args_list[0].args[0]
+                    )
+                    self.assertEqual(execute.call_args_list[1].args[0][1], "load")
+                if args == ["--skip-build"]:
+                    self.assertEqual(execute.call_count, 1)
+                command = execute.call_args_list[-1].args[0]
+                self.assertIn("--network", command)
+                self.assertIn("none", command)
+                self.assertIn("/app/.venv/bin/python", command)
 
 
 class HTTPAuthenticationTests(unittest.TestCase):

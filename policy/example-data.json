@@ -1,0 +1,8 @@
+{
+  "managed": {
+    "buffers": ["irc.docker.#wchat"],
+    "http_methods": ["GET"],
+    "http_hosts": ["example.com"],
+    "log": true
+  }
+}

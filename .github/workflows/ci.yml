@@ -103,6 +103,19 @@ jobs:
       - name: Exercise same image with simulated Railway-private mode and no bearer
         run: timeout 180s uv run --locked python docker_test.py --miniircd .ci/miniircd/miniircd --skip-build --railway-private
 
+  docker_managed:
+    name: Actual Nix-built Docker image and mixed-trust smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@d9186cbdca7adedf113a159fa91f725a27866771 # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Build image with Nix, load it into Docker, and verify behavior offline
+        run: timeout 3500s python3 docker_managed_js_test.py
+
   auth_topology:
     name: Patched Pomerium and Dex auth topology
     runs-on: ubuntu-24.04
