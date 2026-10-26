@@ -58,6 +58,67 @@ runtime closure. Nix applies the checked-in WeeChat patch and builds matching
 plugins. The separate `weechat-managed-container` output is that runtime closure
 for packaging reuse, not an image.
 
+### PR preview images (after the publisher reaches the default branch)
+
+Successful same-repository pull requests publish the **tested Nix-built image**
+to `ghcr.io/r33drichards/weechat-mcp/managed-js` for **linux/amd64**. CI checks out
+the exact PR head for the image build, loads that archive for the offline smoke,
+then uploads the same archive without rebuilding it. The rest of the `Python
+checks` workflow must also succeed. Fork PRs retain build/test validation but do
+not upload publication artifacts, receive registry credentials, or publish.
+
+The three tag forms are:
+
+- `sha-<full-source-sha>`
+- `pr-<number>-<full-source-sha>`
+- `branch-<sanitized-branch>-<12-character-branch-hash>-<full-source-sha>`
+
+The original branch name is hashed before sanitization, so `feature/example`
+and `feature-example` cannot silently share a branch tag. Names are bounded to
+Docker's tag limit. These are **SHA-versioned tags, not moving branch aliases**;
+there is no `latest`, `stable`, release tag, or change to the existing stock
+Docker image. Rerunning a source commit may republish its SHA-versioned tags;
+use the comment's **digest-pinned `docker pull` command** for the exact image.
+
+One `github-actions[bot]` comment per PR is created and subsequently updated with
+all three tags, the source SHA, the verified registry digest, and the originating
+CI run/artifact. Only the bot-owned preview marker is updated; human comments
+are never edited. Closed PRs, advanced heads, old run attempts and superseded
+runs are skipped. Heads are rechecked before each registry write and comment;
+if a PR changes during an in-flight upload, an old SHA-versioned image may remain
+in GHCR, but it cannot advance a moving alias or replace the current comment.
+
+The `workflow_run` publisher checks the trusted workflow ID/path, repository and
+head repository, successful PR run, current open PR/head SHA, artifact provenance
+and GitHub's artifact ZIP digest. It checks out **only its default-branch event
+commit**, never PR code, and copies the Docker archive with `skopeo`; it does not
+load or execute the image. Only that separate job has `packages: write` and
+`pull-requests: write`, using its short-lived `GITHUB_TOKEN`. No PAT, Docker Hub
+credential, deployment secret, persistent registry login or new access grant is
+needed. The temporary registry auth file is removed after the copy.
+
+**Activation and access:** GitHub only starts this publisher after its workflow
+and helper have merged onto the default branch. A stacked PR adding the publisher
+can validate its code and upload its artifact but cannot activate itself or
+prove registry publication yet. After merging, open/update a same-repository PR
+or rerun **all** its CI jobs. A failed-jobs-only rerun can retain the image from an
+older attempt; publication deliberately rejects that artifact and asks for an
+all-jobs rerun rather than weakening attempt provenance. Missing/expired artifacts
+also require rerunning all jobs. Artifacts are retained for three days.
+
+GHCR may initially create the package as **private**. This workflow does not
+change package visibility or account/repository access. Private image pulls need
+the caller's existing authorized GHCR login; public access is a separate operator
+decision. A denied package push remains a failed publication, not a reason to add
+credentials or weaken permissions. Preview images are unreviewed PR code: review
+before running them, and do not attach production data or credentials.
+
+Offline publisher regression tests (no Nix, Docker, registry or network needed):
+
+```sh
+python3 -m unittest test_preview_publisher -v
+```
+
 Operator policy and grant data must be readonly regular files outside the managed
 root. The image defaults to **deny-all data**. To try the example, review
 [`policy/managed.rego`](policy/managed.rego) and
