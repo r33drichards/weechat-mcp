@@ -129,12 +129,107 @@ def main():
     send("trusted-process", "trusted:process:trusted-process-ok")
     initial = call("status")
     assert initial["active"] == [], initial
+    # Read-only status proves a real callback without logging, IRC or HTTP effects.
+    probe = write("setTimeout(()=>{},100);weechat.onMessage(()=>{});")
+    call("validate", {"name": "example", "digest": probe})
+    time.sleep(0.3)
+    assert call("status")["active"] == []
+    before_probe = list(control("status")["messages"])
+    call("activate", {"name": "example", "digest": probe})
+    eventually(
+        lambda: call("status")["active"][0]["timers"]["callbacks_completed"] == 1,
+        "effect-free timer callback reported through status",
+    )
+    probe_status = call("status")["active"][0]
+    assert probe_status["timers"] == {
+        "live": 0,
+        "callbacks_started": 1,
+        "callbacks_completed": 1,
+        "callbacks_failed": 0,
+    }, probe_status
+    # Rejected candidates retain the exact generation and completed counters.
+    rejected = write("setTimeout(()=>{},100);throw Error('reject');", probe)
+    call("validate", {"name": "example", "digest": rejected}, error=True)
+    call("activate", {"name": "example", "digest": rejected}, error=True)
+    assert call("status")["active"] == [probe_status]
+
+    probe = write(
+        "const t=setTimeout(()=>{throw Error('canceled');},100);"
+        "clearTimeout(t);weechat.onMessage(()=>{});",
+        rejected,
+    )
+    activate(probe)
+    time.sleep(0.3)
+    canceled_status = call("status")["active"][0]
+    empty_counts = {
+        "live": 0,
+        "callbacks_started": 0,
+        "callbacks_completed": 0,
+        "callbacks_failed": 0,
+    }
+    assert canceled_status["generation"] != probe_status["generation"]
+    assert canceled_status["timers"] == empty_counts, canceled_status
+
+    probe = write(
+        "let n=0;const t=setInterval(()=>{if(++n===2)clearInterval(t);},100);"
+        "weechat.onMessage(()=>{});",
+        probe,
+    )
+    activate(probe)
+    eventually(
+        lambda: call("status")["active"][0]["timers"]["callbacks_completed"] == 2,
+        "effect-free self-canceled interval completed twice",
+    )
+    interval_status = call("status")["active"][0]
+    assert interval_status["timers"] == {
+        "live": 0,
+        "callbacks_started": 2,
+        "callbacks_completed": 2,
+        "callbacks_failed": 0,
+    }, interval_status
+    time.sleep(0.3)
+    assert call("status")["active"] == [interval_status]
+
+    probe = write(
+        "setTimeout(()=>{throw Error('callback');},100);weechat.onMessage(()=>{});",
+        probe,
+    )
+    activate(probe)
+    eventually(
+        lambda: call("status")["active"][0]["timers"]["callbacks_failed"] == 1,
+        "thrown callback counted as failed, not completed",
+    )
+    failure_status = call("status")["active"][0]
+    assert (
+        failure_status["active"] is True
+    )  # Ordinary exceptions do not retire the generation.
+    assert failure_status["timers"] == {
+        "live": 0,
+        "callbacks_started": 1,
+        "callbacks_completed": 0,
+        "callbacks_failed": 1,
+    }, failure_status
+
+    # Replace a live timer before its deadline; old hooks cannot increment the new generation.
+    probe = write("setTimeout(()=>{},2000);weechat.onMessage(()=>{});", probe)
+    activate(probe)
+    stale_status = call("status")["active"][0]
+    assert stale_status["timers"] == {**empty_counts, "live": 1}, stale_status
+    probe = write("weechat.onMessage(()=>{});", probe)
+    activate(probe)
+    probe_status = call("status")["active"][0]
+    assert probe_status["generation"] != stale_status["generation"]
+    time.sleep(2.1)
+    assert call("status")["active"] == [probe_status]
+    assert probe_status["timers"] == empty_counts, probe_status
+    assert control("status")["messages"] == before_probe
     source = args.source.read_text()
-    digest = write(source)
+    digest = write(source, probe)
     read = call("read", {"name": "example"})
     assert read["source"] == source and read["digest"] == digest, read
-    assert call("status")["active"] == []  # Writing never activates code.
+    assert call("status")["active"] == [probe_status]  # Writing never activates code.
     activate(digest)
+    assert call("status")["active"][0]["timers"]["callbacks_started"] == 0
     send("ping", "v1:pong")
     send("deny", "denied:7")
     send("slash", "/exec /bin/true")
@@ -323,6 +418,11 @@ def main():
             ),
             f"managed generation retired after {trigger}",
         )
+        if trigger.startswith("timer-"):
+            retired = next(
+                item for item in call("status")["active"] if item["name"] == "example"
+            )
+            assert retired["timers"]["callbacks_failed"] >= 1, retired
         send("trusted-ping", "trusted:pong")
         send("trusted-process", "trusted:process:trusted-process-ok")
         replacement = write(source.replace("v1:pong", "recovered:pong"), replacement)

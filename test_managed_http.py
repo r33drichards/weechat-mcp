@@ -4,6 +4,7 @@
 import json
 import socket
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -332,6 +333,42 @@ class NativeHTTPTests(unittest.TestCase):
             result = getattr(weechat_mcp, callback)(data, url, options, output)
         self.assertEqual(result, self.w.WEECHAT_RC_OK)
         self.assertEqual(len(self.results), 1)
+
+    def test_public_http_opt_in_preserves_mandatory_address_and_transport_guards(self):
+        grant = json.loads(
+            (Path(__file__).parent / "policy/cuse2-public-data.json").read_text()
+        )["managed"]
+        self.assertIs(grant["public_http"], True)
+        self.assertEqual(set(grant["http_methods"]), http.METHODS)
+        self.assertEqual(grant["buffers"], ["irc.docker.#cuse2"])
+        self.assertFalse(grant["log"])
+        for index, method in enumerate(grant["http_methods"], 1):
+            body = "" if method == "GET" else "synthetic"
+            with self.subTest(method=method):
+                for address in ("127.0.0.1", "10.0.0.1", "169.254.169.254", "[::1]"):
+                    with self.assertRaises(http.HttpError):
+                        self.client.request(index, method, f"http://{address}/", body)
+                self.assertFalse(self.w.processes)
+                self.client.request(index, method, URL, body)
+                self.resolve([answer(), answer("10.0.0.1")], ident=index)
+                self.assertEqual(self.results[-1]["outcome"], "not_sent")
+                self.assertFalse(self.w.urls)
+                self.w.processes.clear()
+                self.client.request(index, method, URL, body)
+                self.resolve(ident=index)
+                options = self.w.urls[-1][1]
+                self.assertEqual(
+                    options["resolve"], "public.example.test:443:" + PUBLIC
+                )
+                self.assertEqual(options["followlocation"], "0")
+                self.assertEqual(options["maxredirs"], "0")
+                self.assertEqual(options["proxy"], "")
+                self.assertEqual(options["netrc"], "ignored")
+                self.assertEqual(options["ssl_verifypeer"], "1")
+                self.assertEqual(self.w.processes[-1][0], "func:managed_dns_worker")
+                self.finish(ident=index)
+                self.w.urls.clear()
+                self.w.processes.clear()
 
     def test_every_dns_answer_checked_again_in_parent(self):
         for records in (

@@ -1,0 +1,9 @@
+{
+  "managed": {
+    "buffers": ["irc.docker.#cuse2"],
+    "http_methods": ["GET", "POST", "PUT", "DELETE"],
+    "http_hosts": [],
+    "public_http": true,
+    "log": false
+  }
+}

@@ -122,6 +122,30 @@ class ManagedTests(unittest.TestCase):
         self.assertEqual(self.call("status"), {"files": ["bot"], "active": []})
         self.assertEqual((self.root / "bot.js").stat().st_mode & 0o777, 0o600)
 
+    def test_status_preserves_native_timer_counters_without_effect_calls(self):
+        active = [
+            {
+                "name": "probe",
+                "generation": 7,
+                "active": True,
+                "digest": "a" * 64,
+                "timers": {
+                    "live": 0,
+                    "callbacks_started": 1,
+                    "callbacks_completed": 1,
+                    "callbacks_failed": 0,
+                },
+            }
+        ]
+        with patch.object(
+            self.w,
+            "info_get_hashtable",
+            return_value={"ok": "1", "plugins": json.dumps(active)},
+        ) as native:
+            self.assertEqual(self.call("status"), {"files": [], "active": active})
+            native.assert_called_once_with("javascript_managed_status", {})
+        self.assertEqual(self.w.calls, [])
+
     def test_source_changes_require_current_digest(self):
         first = self.call("write", name="bot", source="one", expected_digest="")
         with self.assertRaises(ValueError):
