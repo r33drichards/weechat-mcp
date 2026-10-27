@@ -1,0 +1,44 @@
+--- a/src/plugins/javascript/weechat-js.cpp
++++ b/src/plugins/javascript/weechat-js.cpp
+@@ -22,0 +23 @@
++#include "weechat-js-managed.h"
+@@ -335 +336,6 @@
+-        source = weechat_file_get_content (filename);
++        // Agent-writable source cannot be promoted through the legacy loader.
++        // The managed-mode reader classifies and reads one opened descriptor.
++        bool managed_read = false;
++        source = weechat_js_managed_read_trusted (filename, &managed_read);
++        if (!managed_read)
++            source = weechat_file_get_content (filename);
+@@ -1004,0 +1011,4 @@
++    // Classification and policy are initialized before any legacy autoload.
++    if (!weechat_js_managed_init ())
++        return WEECHAT_RC_ERROR;
++
+@@ -1056,0 +1067,2 @@
++    weechat_js_managed_end ();
++
+--- a/src/plugins/javascript/weechat-js-api.cpp
++++ b/src/plugins/javascript/weechat-js-api.cpp
+@@ -36,0 +37,8 @@
++    /* Restricted isolates never enter the full legacy host surface. */  \
++    if (args.GetIsolate() != js_isolate)                                 \
++    {                                                                   \
++        args.GetIsolate()->ThrowException(v8::Exception::Error(          \
++            v8::String::NewFromUtf8Literal(args.GetIsolate(),            \
++                                           "legacy_api_denied")));     \
++        return;                                                         \
++    }                                                                   \
+--- a/src/plugins/javascript/CMakeLists.txt
++++ b/src/plugins/javascript/CMakeLists.txt
+@@ -7,0 +8,4 @@
++find_package(Threads REQUIRED)
++if(NOT WEECHAT_MANAGED_POLICY_LIBRARY OR NOT WEECHAT_MANAGED_POLICY_INCLUDE_DIR)
++  message(FATAL_ERROR "Managed JavaScript requires the pinned standalone Rego library")
++endif()
+@@ -12,0 +17 @@
++  weechat-js-managed.cpp weechat-js-managed.h
+@@ -26,0 +32,3 @@
++
++target_include_directories(javascript PRIVATE ${WEECHAT_MANAGED_POLICY_INCLUDE_DIR})
++target_link_libraries(javascript ${WEECHAT_MANAGED_POLICY_LIBRARY} Threads::Threads)

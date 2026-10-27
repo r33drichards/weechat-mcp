@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+name = "weechat-managed-policy"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-or-later"
+description = "Independent embedded Rego authorization boundary for WeeChat managed JavaScript"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# This is the independent evaluator package, NOT a dependency on mcp-js.
+# Do not enable full-opa: the host does not need network, time, regex or random
+# policy builtins. Exact dependencies are additionally frozen in Cargo.lock.
+regorus = { version = "=0.5.0", default-features = false, features = ["std", "arc"] }
+serde_json = "=1.0.154"
+
+[profile.release]
+# Catch Rust panics at the C boundary. An allocator abort/OOM is still fatal.
+panic = "unwind"

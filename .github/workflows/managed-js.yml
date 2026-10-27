@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Managed JavaScript NixOS
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  managed-js:
+    name: Authoritative patched Nix build and mixed-trust NixOS VM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@d9186cbdca7adedf113a159fa91f725a27866771 # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Grant this ephemeral runner access to KVM
+        run: |
+          test -c /dev/kvm
+          sudo chown "$(id -u):$(id -g)" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+      - name: Evaluate every supported package and test
+        run: nix flake check --no-build --all-systems
+      - name: Build independent policy and patched modern WeeChat
+        run: nix build --no-link --print-build-logs .#managed-policy .#weechat-managed-container
+      - name: Run actual NixOS mixed-trust integration
+        run: nix build --no-link --print-build-logs .#checks.x86_64-linux.managed-js-vm

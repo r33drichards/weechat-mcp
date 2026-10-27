@@ -14,6 +14,75 @@ from pathlib import Path
 
 UID = GID = 10001
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+MANAGED_BINARY = "/opt/weechat-managed/bin/weechat-headless"
+MANAGED_PLUGIN_DIR = "/opt/weechat-managed/lib/weechat/plugins"
+
+
+def managed_settings(env):
+    """Validate managed MCP configuration without changing the trusted profile."""
+    value = env.get("WEECHAT_MCP_MANAGED_JS", "0")
+    if value not in ("0", "1"):
+        raise ValueError("WEECHAT_MCP_MANAGED_JS must be 0 or 1")
+    if value == "0":
+        return None
+    # This is the agent MCP boundary, not a global restriction on trusted native
+    # plugins or scripts. Full MCP control could otherwise bypass managed policy.
+    if env.get("WEECHAT_MCP_FULL_CONTROL") != "0":
+        raise ValueError("Managed JavaScript requires WEECHAT_MCP_FULL_CONTROL=0")
+    paths = {}
+    for name in ("ROOT", "POLICY", "DATA"):
+        key = "WEECHAT_MANAGED_" + name
+        path = Path(env.get(key, ""))
+        if not path.is_absolute() or ".." in path.parts:
+            raise ValueError(key + " must be an absolute path")
+        paths[name.lower()] = path
+    root = paths["root"]
+    # Managed source may be edited by MCP, but must never become trusted Python/
+    # JavaScript autoload source or an operator-owned policy/data replacement.
+    trusted = [
+        Path("/app"),
+        Path("/usr"),
+        Path("/nix"),
+        Path("/etc"),
+        Path("/opt/weechat-managed"),
+    ]
+    persistent = home(env)
+    if persistent is not None:
+        trusted.append(persistent)
+    if any(root.is_relative_to(path) or path.is_relative_to(root) for path in trusted):
+        raise ValueError(
+            "WEECHAT_MANAGED_ROOT must be separate from trusted code/profile directories"
+        )
+    if any(paths[key].is_relative_to(root) for key in ("policy", "data")):
+        raise ValueError("Managed policy and data must be outside WEECHAT_MANAGED_ROOT")
+    return paths
+
+
+def initialize_managed_root(path):
+    """Prepare one private source directory, never chown policy or its parents."""
+    if path.resolve() != path:
+        raise ValueError("WEECHAT_MANAGED_ROOT must not contain symbolic links")
+    path.mkdir(mode=0o700, exist_ok=True)
+    fd = os.open(path, DIRECTORY_FLAGS)
+    try:
+        info = os.fstat(fd)
+        allowed = (0, UID) if os.getuid() == 0 else (os.getuid(),)
+        if info.st_uid not in allowed or info.st_mode & 0o022:
+            raise ValueError("Unsafe WEECHAT_MANAGED_ROOT ownership or permissions")
+        if os.getuid() == 0:
+            os.fchown(fd, UID, GID)
+        os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
+
+
+def weechat_command(profile, commands, managed=False):
+    """Opt in to the fork binary without altering trusted startup semantics."""
+    binary = MANAGED_BINARY if managed else "weechat-headless"
+    command = [binary, "-d", str(profile), "-p", "--stdout"]
+    for item in commands:
+        command += ["-r", item]
+    return command
 
 
 def configuration(env, first_boot=True):
@@ -50,9 +119,16 @@ def configuration(env, first_boot=True):
         f"/set irc.server.docker.nicks {nick}",
         "/set irc.server.docker.autojoin " + ",".join(channels),
     ]
+    plugins = (
+        [
+            "/plugin load " + MANAGED_PLUGIN_DIR + "/" + name + ".so"
+            for name in ("irc", "python", "javascript")
+        ]
+        if env.get("WEECHAT_MCP_MANAGED_JS") == "1"
+        else ["/plugin load irc", "/plugin load python"]
+    )
     return [
-        "/plugin load irc",
-        "/plugin load python",
+        *plugins,
         "/python load " + str(Path(__file__).with_name("weechat_mcp.py")),
         *(setup if first_boot else []),
         "/connect docker",
@@ -136,6 +212,7 @@ def stop(process):
 
 
 def run():
+    managed = managed_settings(os.environ)
     configuration(os.environ)  # Validate before touching storage or privileges.
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
     if transport not in ("stdio", "http"):
@@ -148,6 +225,12 @@ def run():
         )  # Fail before connecting IRC if HTTP is unsafe.
         event_settings(os.environ, auth, transport)
     os.umask(0o077)
+    if managed is not None:
+        if not Path(MANAGED_BINARY).is_file():
+            raise ValueError(
+                "Managed JavaScript requires the opt-in managed-js image target"
+            )
+        initialize_managed_root(managed["root"])
     persistent = home(os.environ)
     if persistent is not None:
         first_boot = initialize_home(persistent)
@@ -174,9 +257,7 @@ def run():
                 raise ValueError(
                     "WEECHAT_MCP_LOOPBACK_PORT only supports explicit test value 0"
                 )
-            cmd = ["weechat-headless", "-d", profile, "-p", "--stdout"]
-            for command in commands:
-                cmd += ["-r", command]
+            cmd = weechat_command(profile, commands, managed=managed is not None)
             weechat = subprocess.Popen(
                 cmd,
                 stdin=subprocess.DEVNULL,
