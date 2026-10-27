@@ -458,3 +458,17 @@ all incoming messages using bounded channel history and a user-set preference.
 It requires explicit operator and subscription opt-in, is disabled by default,
 and never creates or widens subscriptions automatically. See the
 [Jev configuration, disclosure and failure policy](MCP_EVENTS.md#optional-jev-preference-filter-disabled-by-default).
+
+## Optional managed JavaScript with embedded policy
+
+[Managed JavaScript](MANAGED_JS.md) extends the existing WeeChat V8 plugin with
+separate managed isolates, typed capabilities, an independent embedded Rego
+policy, and named edit/validate/hot-activate tools. Existing trusted plugins retain
+their APIs; no global no-exec filter is imposed. Policy administration stays
+outside the managed source root and connected client's tools.
+
+Nix applies a checked-in patch to pinned modern WeeChat and builds the opt-in
+Docker image, including locked MCP bridge dependencies (`nix build .#managed-js-image`).
+The default stock Dockerfile image is unchanged.
+The modern target is explicitly **5.0.0-dev**, not the default stock 4.6.3 package.
+See the guide for resource boundaries, configuration, and NixOS integration tests.

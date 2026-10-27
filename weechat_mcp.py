@@ -59,6 +59,7 @@ class WeeChatAPI:
             full_control_enabled() if full_control is None else full_control
         )
         self.command_source = None
+        self.managed = None
         source_path = os.environ.get("WEECHAT_MCP_SOURCE_MANIFEST")
         if self.full_control and source_path:
             with open(source_path) as source_file:
@@ -248,6 +249,8 @@ class WeeChatAPI:
                     },
                 }
             )
+        if self.managed is not None:
+            tools.extend(self.managed.tools())
         return tools
 
     def call(self, name, args):
@@ -255,6 +258,13 @@ class WeeChatAPI:
             raise ValueError("Tool name must be a string")
         if not isinstance(args, dict):
             raise ValueError("Arguments must be an object")
+        if self.managed is not None and name.startswith("weechat_managed_script_"):
+            try:
+                return self.managed.call(name, args)
+            except OSError as error:
+                raise ValueError(
+                    "Managed source file is unavailable or unsafe"
+                ) from error
         if self.full_control:
             if name in ("weechat_command_manifest", "weechat_command_contexts"):
                 if args:
@@ -442,6 +452,8 @@ def printed(data, buffer, date, tags, displayed, highlight, prefix, message):
         uri = api.uri(name)
         for sock, state in list(clients.items()):
             send(sock, {"event": "updated", "uri": uri})
+    if api.managed is not None:
+        api.managed.message(name, tags, prefix, message)
     return api.w.WEECHAT_RC_OK
 
 
@@ -456,6 +468,8 @@ def buffer_closing(data, signal, pointer):
 
 def shutdown():
     assert api is not None
+    if api.managed is not None:
+        api.managed.close()
     for sock in list(clients):
         drop(sock)
     if listener:
@@ -463,6 +477,57 @@ def shutdown():
     if owns_socket and socket_path and os.path.exists(socket_path):
         os.unlink(socket_path)
     return api.w.WEECHAT_RC_OK
+
+
+def managed_dns_worker(data):
+    # Fixed native func: child; never call WeeChat, V8 or policy from the child.
+    from managed_http import dns_worker
+
+    return dns_worker(data)
+
+
+def managed_dns_done(data, command, return_code, out, err):
+    assert api is not None
+    if api.managed is not None:
+        api.managed.http.dns_done(data, command, return_code, out, err)
+    return api.w.WEECHAT_RC_OK
+
+
+def managed_url_done(data, url, options, output):
+    # Native hook_url callbacks receive both the request options and response.
+    # Only the response is passed to the controller; options are host-owned.
+    assert api is not None
+    if api.managed is not None:
+        api.managed.http.url_done(data, url, output)
+    return api.w.WEECHAT_RC_OK
+
+
+def managed_send(data, info_name, values):
+    from managed_js import internal_result
+
+    assert api is not None and api.managed is not None
+    return internal_result(api.managed.send, values)
+
+
+def managed_http_validate(data, info_name, values):
+    from managed_js import internal_result
+
+    assert api is not None and api.managed is not None
+    return internal_result(api.managed.http_validate, values)
+
+
+def managed_http_start(data, info_name, values):
+    from managed_js import internal_result
+
+    assert api is not None and api.managed is not None
+    return internal_result(api.managed.http_start, values)
+
+
+def managed_http_cancel(data, info_name, values):
+    from managed_js import internal_result
+
+    assert api is not None and api.managed is not None
+    return internal_result(api.managed.http_cancel, values)
 
 
 socket_path = None
@@ -483,6 +548,14 @@ if weechat and weechat.register(
     if not weechat.config_is_set_plugin("buffers"):
         weechat.config_set_plugin("buffers", "irc.railway.#wchat")
     api = WeeChatAPI(weechat)
+    if os.environ.get("WEECHAT_MCP_MANAGED_JS", "0") != "0":
+        from managed_js import ManagedScripts
+        from managed_js import enabled as managed_enabled
+
+        managed_enabled()  # Invalid explicit values fail before IPC exposure.
+        api.managed = ManagedScripts(api)
+        # A 64 KiB UTF-8 source may expand sixfold when JSON-escaped.
+        MAX_FRAME = 512 * 1024
     directory = os.path.join(weechat.info_get("weechat_data_dir", ""), "mcp")
     os.makedirs(directory, mode=0o700, exist_ok=True)
     os.chmod(directory, 0o700)
