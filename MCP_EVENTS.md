@@ -159,3 +159,82 @@ provider credentials or live subscriptions are created by this PR.
 Primary API references: [Choice](https://docs.typesafe.ai/primitives/choice),
 [System One](https://docs.typesafe.ai/api/system-one),
 [models](https://docs.typesafe.ai/models).
+
+### Optional automatic coverage recovery
+
+Existing clients retain the default explicit-renewal behavior. An explicitly
+configured consumer may include this non-standard extension in `events/subscribe`:
+
+```json
+{"recovery":{"mode":"prove","expectedIncarnation":"<32 lowercase hex characters>"}}
+```
+
+`expectedIncarnation` is optional for first enrollment and required by a consumer
+once pinned. A mismatch fails before changing the existing subscription. Omitting
+`recovery` on a successful renewal opts out (sets producer recovery mode to off);
+configuration changes therefore propagate at the next successful renewal, not
+instantly. Expired leases do not deliver. Queue rows, flags and audit history are
+preserved by opt-out. Mode
+`prove` only reconciles a missing bounded-window prefix when read-only native
+pages reach the exact saved intake anchor in the same native buffer epoch.
+Mode `resume` additionally authorizes **acknowledged historical loss** when an
+old epoch/retained prefix or legacy gap cannot be reconstructed. Do not enable it
+without accepting that older messages may never be processed. It never clears
+poison delivery failures or makes uncertain tool actions safe to repeat.
+
+Every grant now includes `coverage` with `version:1`, a random persisted
+`incarnation`, monotonic gap `generation`, and `status` (`continuous`, `recovering`,
+`gap`, or `degraded`). Same-ID recreation changes incarnation. For a matching pinned incarnation, or explicit replay of an exact retained
+sent/dropped receipt belonging to the current subscription, the response also
+includes `continuity:"retained-subscription"`. Numeric cursor ranges alone are
+not proof: same-ID recreation can later ACK past an old cursor. Zero, missing or
+pruned legacy anchors require an explicit audited gap decision; `resume` may
+acknowledge that loss but never labels it proved continuity. This proves a
+retained producer identity/receipt, not that the consumer completed every
+accepted task. Cursors stay opaque.
+
+A proved recovery returns `status:"continuous"`, `proof:"retained_native_anchor"`
+and `recoveredGeneration` equal to `generation`. A loss-accepting recovery returns
+`status:"degraded"`, `proof:"acknowledged_loss"`, `acknowledgedGeneration` equal
+to `generation`, and **retains `truncated:true`**. Historical accepted loss remains
+visible after later successful recovery through `lossGeneration`. If a later gap
+is proved, the response remains degraded/truncated but reports
+`proof:"retained_native_anchor"` and that new `recoveredGeneration`, not a false
+new loss acknowledgment. Consumers must explicitly support these
+states; they must not treat every truncated grant as safe. Each newly detected
+gap gets a new generation and a durable `coverage_audit` boundary/reason record.
+Legacy sticky flags without an original boundary are `legacy_unknown`, never
+silently promoted to proven continuity.
+
+For opted-in subscriptions, a new gap freezes intake and delivery before newer
+lines can cross missing history. Proof reads at most 20 existing native pages,
+4 MiB and 15 seconds, with persisted exponential retry from 30 seconds to 15
+minutes. Page/budget/temporary transport failures remain held; budget exhaustion
+is not evidence that history is gone. Complete same-epoch replay commits
+oldest-first with existing stable event IDs and outbox deduplication. Restart
+restarts the bounded read, not event identity. No native content cache is added.
+
+`resume` preserves all existing outbox rows and audits its recovery boundary. On
+an epoch change it starts at the new tip rather than importing possibly
+pre-subscription history under new IDs; on same-epoch retained-prefix loss it
+keeps available post-anchor lines in order. Already-advanced legacy gaps do not
+backfill older events behind newer queued positions. Opted-in expired producer
+rows (including pending work after a later opt-out) are retained for explicit
+consumer renewal instead of being deleted after 24 hours; the existing
+100-subscription admission limit remains. Explicit
+unsubscribe and access revocation keep their existing destructive semantics.
+
+For opted-in subscriptions, allowlisted transient callback failures (408, 429,
+5xx, timeout, DNS or connection failures) retry the same head event beyond the
+normal eight-attempt limit, with a persisted cooldown capped at 15 minutes. The
+next due time is reserved before network I/O, so a restart or uncertain response
+cannot reset the cooldown. Stable event IDs let a durable consumer deduplicate
+accepted deliveries. Permanent HTTP/security errors, filter failures, and legacy
+unclassified exhausted/poison rows remain stopped and are never skipped. Cursor
+replay does not reset existing pending retries. Without opt-in, the existing
+eight-attempt limit remains.
+
+This extension does not unlock a suspended/poison outbox, reset a consumer
+conversation, or replay remote side effects. Configuration
+and audit records contain no signing secrets or message text. Native pagination
+continues to enforce the same channel scope and tamper/reload-bound cursors.

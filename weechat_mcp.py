@@ -42,7 +42,7 @@ class BridgeProtocol:
             elif operation == "buffer_data":
                 result = self.api.buffer_data(self.api.resolve(req["uri"]), MAX_LINES)
             elif operation == "event_history":
-                result = self.api.event_history(req["uri"])
+                result = self.api.event_history(req["uri"], req.get("cursor"))
             else:
                 raise ValueError("Unknown bridge operation")
             return {"id": ident, "result": result}
@@ -354,7 +354,7 @@ class WeeChatAPI:
             raise ValueError("Buffer is not exposed")
         return self.native.snapshot(b, pointer, limit, cursor)
 
-    def event_history(self, uri):
+    def event_history(self, uri, cursor=None):
         if not isinstance(uri, str) or not uri.startswith("weechat://buffer/"):
             raise ValueError("Unknown resource")
         b = unquote(uri[len("weechat://buffer/") :])
@@ -371,7 +371,7 @@ class WeeChatAPI:
         ):
             raise ValueError("Buffer is not an exposed IRC channel")
         try:
-            return self.native.event_snapshot(b, pointer)
+            return self.native.event_snapshot(b, pointer, cursor)
         except ValueError as error:
             # A native data/read limit is not a permission revocation. Events
             # must retain the grant and retry instead of deleting its outbox.

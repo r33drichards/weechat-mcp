@@ -184,6 +184,30 @@ class NativeBufferTests(unittest.TestCase):
         self.assertEqual(result["evicted_through"], 0)
         self.assertEqual(result["native_retained_from"], 1_000_000_000_000)
 
+    def test_private_event_history_pages_keep_epoch_order_and_scope(self):
+        uri = self.api.uri(NAME)
+        first = self.api.event_history(uri)
+        self.w.add_line("newer than first page")
+        older = self.api.event_history(uri, first["next_cursor"])
+        self.assertEqual(first["epoch"], older["epoch"])
+        self.assertEqual([x["sequence"] for x in older["lines"]], list(range(1, 151)))
+        self.assertIsNone(older["next_cursor"])
+        self.assertTrue(all(x["is_message"] for x in older["lines"]))
+        response = plugin.BridgeProtocol(self.api).handle(
+            {
+                "id": 1,
+                "operation": "event_history",
+                "uri": uri,
+                "cursor": first["next_cursor"],
+            }
+        )
+        self.assertEqual(response["result"]["lines"], older["lines"])
+        self.api.native = NativeBuffers(self.w)
+        with self.assertRaises(ConnectionError):
+            self.api.event_history(uri, first["next_cursor"])
+        with self.assertRaises(ValueError):
+            self.api.event_history(self.api.uri("core.weechat"))
+
     def test_print_hook_is_notification_only(self):
         before = self.read()
         with patch.object(plugin, "api", self.api), patch.object(plugin, "clients", {}):

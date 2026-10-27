@@ -232,6 +232,49 @@ class EventManager:
         for name in ("filter_context", "decision"):
             if name not in columns:
                 self.db.execute(f"ALTER TABLE outbox ADD COLUMN {name} TEXT")
+        columns = {
+            row[1] for row in self.db.execute("PRAGMA table_info(subscriptions)")
+        }
+        for name, definition in {
+            "incarnation": "TEXT",
+            "recovery_mode": "TEXT NOT NULL DEFAULT 'off'",
+            "coverage_generation": "INTEGER NOT NULL DEFAULT 0",
+            "coverage_state": "TEXT NOT NULL DEFAULT 'continuous'",
+            "coverage_reason": "TEXT",
+            "coverage_anchor": "TEXT",
+            "recovery_due": "REAL NOT NULL DEFAULT 0",
+            "recovery_attempts": "INTEGER NOT NULL DEFAULT 0",
+            "coverage_lost": "INTEGER NOT NULL DEFAULT 0",
+            "loss_generation": "INTEGER NOT NULL DEFAULT 0",
+            "recovery_enrolled": "INTEGER NOT NULL DEFAULT 0",
+        }.items():
+            if name not in columns:
+                self.db.execute(
+                    f"ALTER TABLE subscriptions ADD COLUMN {name} {definition}"
+                )
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS coverage_audit(subscription TEXT NOT NULL,incarnation TEXT NOT NULL,generation INTEGER NOT NULL,state TEXT NOT NULL,reason TEXT NOT NULL,boundary TEXT NOT NULL,created REAL NOT NULL,resolved REAL,PRIMARY KEY(subscription,incarnation,generation))"
+        )
+        for row in self.db.execute(
+            "SELECT * FROM subscriptions WHERE incarnation IS NULL"
+        ).fetchall():
+            self.db.execute(
+                "UPDATE subscriptions SET incarnation=? WHERE id=?",
+                (secrets.token_hex(16), row["id"]),
+            )
+        # Old sticky flags lack a trustworthy original boundary. Never infer one.
+        self.clock = clock
+        for row in self.db.execute(
+            "SELECT * FROM subscriptions WHERE truncated=1 AND coverage_generation=0"
+        ).fetchall():
+            self._gap(row, "legacy_unknown")
+        if "failure_class" not in {
+            row[1] for row in self.db.execute("PRAGMA table_info(outbox)")
+        }:
+            self.db.execute("ALTER TABLE outbox ADD COLUMN failure_class TEXT")
+        self.db.execute(
+            "UPDATE subscriptions SET recovery_enrolled=1 WHERE recovery_mode!='off' AND recovery_enrolled=0"
+        )
         self.db.commit()
         self.judge = judge
         self.backend, self.owner_allowed = backend, owner_allowed
@@ -246,6 +289,250 @@ class EventManager:
         self.task = None
         self.closed = False
         self.stopping = False
+
+    def _coverage(self, row, continuity=False):
+        result = {
+            "version": 1,
+            "incarnation": row["incarnation"],
+            "generation": row["coverage_generation"],
+            "status": row["coverage_state"],
+        }
+        if row["coverage_reason"]:
+            result["reason"] = row["coverage_reason"]
+        latest = self.db.execute(
+            "SELECT state FROM coverage_audit WHERE subscription=? AND incarnation=? AND generation=?",
+            (row["id"], row["incarnation"], row["coverage_generation"]),
+        ).fetchone()
+        if row["loss_generation"]:
+            result["lossGeneration"] = row["loss_generation"]
+        if latest and latest["state"] == "recovered":
+            result.update(
+                recoveredGeneration=row["coverage_generation"],
+                proof="retained_native_anchor",
+            )
+        elif row["coverage_state"] == "degraded":
+            result.update(
+                acknowledgedGeneration=row["loss_generation"], proof="acknowledged_loss"
+            )
+        if continuity:
+            result["continuity"] = "retained-subscription"
+        return result
+
+    def _gap(self, row, reason, snapshot=None):
+        if row["coverage_state"] in ("gap", "recovering"):
+            return
+        generation = row["coverage_generation"] + 1
+        detected_reason = reason
+        if row["recovery_mode"] == "off":
+            reason = "legacy_unknown"
+        anchor = {
+            "detectedReason": detected_reason,
+            "epoch": row["epoch"],
+            "intake": row["intake"],
+            "acknowledged": row["acknowledged"],
+            "prunedThrough": row["pruned_through"],
+            "observedEpoch": snapshot.get("epoch") if snapshot else None,
+            "observedTip": max((x["sequence"] for x in snapshot["lines"]), default=0)
+            if snapshot
+            else None,
+        }
+        recoverable = reason == "native_window_gap" and row["recovery_mode"] != "off"
+        state = "recovering" if recoverable else "gap"
+        self.db.execute(
+            "UPDATE subscriptions SET truncated=1,coverage_generation=?,coverage_state=?,coverage_reason=?,coverage_anchor=?,recovery_due=0,recovery_attempts=0 WHERE id=?",
+            (generation, state, reason, canonical(anchor), row["id"]),
+        )
+        self.db.execute(
+            "INSERT INTO coverage_audit(subscription,incarnation,generation,state,reason,boundary,created) VALUES(?,?,?,?,?,?,?)",
+            (
+                row["id"],
+                row["incarnation"],
+                generation,
+                state,
+                reason,
+                canonical(anchor),
+                self.clock(),
+            ),
+        )
+
+    async def _reconcile(self, ident):
+        """Bounded read-only native paging; commit only a complete same-epoch chain.
+
+        Caller owns the subscription lock. No cursor/line content is persisted in
+        recovery metadata. A restart safely restarts the bounded read attempt.
+        """
+        row = self.db.execute(
+            "SELECT * FROM subscriptions WHERE id=?", (ident,)
+        ).fetchone()
+        if (
+            not row
+            or row["recovery_mode"] == "off"
+            or row["coverage_state"] not in ("gap", "recovering")
+            or row["recovery_due"] > self.clock()
+        ):
+            return
+        generation = row["coverage_generation"]
+        # Reserve attempts before I/O; repeated subscribe/collect cannot spin.
+        attempts = row["recovery_attempts"] + 1
+        with self.db:
+            self.db.execute(
+                "UPDATE subscriptions SET recovery_attempts=?,recovery_due=? WHERE id=?",
+                (
+                    attempts,
+                    self.clock() + min(900, 30 * 2 ** min(attempts - 1, 5)),
+                    ident,
+                ),
+            )
+        args = json.loads(row["arguments"])
+        deadline = time.monotonic() + 15
+
+        async def read_page(cursor=None):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise asyncio.TimeoutError()
+            return await asyncio.wait_for(
+                self._history(args["channel_id"], cursor), min(5, remaining)
+            )
+
+        try:
+            latest = await read_page()
+            anchor = json.loads(row["coverage_anchor"])
+            pages = [latest]
+            proven = False
+            loss_known = (
+                row["coverage_reason"] != "native_window_gap"
+                or latest["epoch"] != anchor["epoch"]
+            )
+            if (
+                row["coverage_reason"] == "native_window_gap"
+                and latest["epoch"] == anchor["epoch"]
+            ):
+                size = len(canonical(latest).encode())
+                seen = set()
+                for page_index in range(20):
+                    page = pages[-1]
+                    if page["epoch"] != anchor["epoch"]:
+                        break
+                    # Native IDs may be sparse: require the exact saved anchor,
+                    # not arithmetic or an oldest-ID comparison.
+                    if any(x["sequence"] == anchor["intake"] for x in page["lines"]):
+                        proven = True
+                        break
+                    cursor = page.get("next_cursor")
+                    if not cursor:
+                        loss_known = (
+                            True  # Native chain ended without the saved anchor.
+                        )
+                        break
+                    if cursor in seen or page_index == 19:
+                        break
+                    seen.add(cursor)
+                    page = await read_page(cursor)
+                    size += len(canonical(page).encode())
+                    if size > 4 * 1024 * 1024:
+                        break
+                    pages.append(page)
+            current = self.db.execute(
+                "SELECT * FROM subscriptions WHERE id=?", (ident,)
+            ).fetchone()
+            if (
+                not current
+                or current["incarnation"] != row["incarnation"]
+                or current["coverage_generation"] != generation
+                or current["coverage_state"] not in ("gap", "recovering")
+            ):
+                return
+            if current["expires"] <= self.clock() or not self.owner_allowed(
+                current["owner"]
+            ):
+                return
+            if proven:
+                lines = [
+                    line
+                    for page in reversed(pages)
+                    for line in page["lines"]
+                    if line["sequence"] > anchor["intake"]
+                ]
+                # A page chain must be strictly native-order, with no duplicates.
+                ids = [line["sequence"] for line in lines]
+                if ids != sorted(set(ids)):
+                    return
+                queued = self.db.execute(
+                    "SELECT COUNT(*) FROM outbox WHERE subscription=? AND status NOT IN ('sent','dropped')",
+                    (ident,),
+                ).fetchone()[0]
+                if (
+                    queued
+                    + sum(
+                        matches(args, line, latest.get("own_nick", ""))
+                        for line in lines
+                    )
+                    > 10000
+                ):
+                    return
+                recovered = {
+                    **latest,
+                    "lines": lines,
+                    "evicted_through": 0,
+                    "native_retained_from": None,
+                }
+                with self.db:
+                    self.db.execute(
+                        "UPDATE subscriptions SET truncated=coverage_lost,coverage_state=CASE WHEN coverage_lost=1 THEN 'degraded' ELSE 'continuous' END,recovery_attempts=0 WHERE id=?",
+                        (ident,),
+                    )
+                    self._ingest(ident, recovered)
+                    self.db.execute(
+                        "UPDATE coverage_audit SET state='recovered',resolved=? WHERE subscription=? AND incarnation=? AND generation=?",
+                        (self.clock(), ident, row["incarnation"], generation),
+                    )
+                self.wake.set()
+            elif (
+                row["recovery_mode"] == "resume"
+                and loss_known
+                and row["coverage_reason"] != "queue_capacity"
+            ):
+                # Explicit loss policy: preserve queued work and never reorder
+                # it by backfilling prior events under new outbox cursors.
+                high = row["intake"]
+                if latest["epoch"] != row["epoch"]:
+                    high = max((x["sequence"] for x in latest["lines"]), default=0)
+                    if isinstance(latest.get("last_assigned_id"), int):
+                        high = max(high, latest["last_assigned_id"] + 1)
+                elif row["coverage_reason"] == "native_window_gap":
+                    # Replay only retained post-anchor lines. Missing older
+                    # lines are explicitly acknowledged, not invented.
+                    high = max(high, latest.get("evicted_through", 0))
+                with self.db:
+                    boundary = json.loads(row["coverage_anchor"])
+                    boundary.update(
+                        resumeEpoch=latest["epoch"],
+                        resumeIntake=high,
+                        policy="resume",
+                        warning="Historical messages may be unavailable; queued work was preserved.",
+                    )
+                    self.db.execute(
+                        "UPDATE subscriptions SET epoch=?,intake=?,coverage_state='degraded',coverage_lost=1,loss_generation=coverage_generation,coverage_anchor=?,recovery_attempts=0 WHERE id=?",
+                        (latest["epoch"], high, canonical(boundary), ident),
+                    )
+                    self.db.execute(
+                        "UPDATE coverage_audit SET state='acknowledged-loss',boundary=?,resolved=? WHERE subscription=? AND incarnation=? AND generation=?",
+                        (
+                            canonical(boundary),
+                            self.clock(),
+                            ident,
+                            row["incarnation"],
+                            generation,
+                        ),
+                    )
+                    self._ingest(
+                        ident,
+                        {**latest, "evicted_through": 0, "native_retained_from": None},
+                    )
+                self.wake.set()
+        except (ConnectionError, asyncio.TimeoutError, EventError):
+            # Remains durably held; the existing bounded backoff schedules retry.
+            return
 
     def _lock(self, ident):
         lock = self.locks.get(ident)
@@ -284,10 +571,12 @@ class EventManager:
         )
         return ident, arguments, url
 
-    async def _history(self, channel):
+    async def _history(self, channel, cursor=None):
         try:
             return await self.backend.request(
-                "event_history", uri="weechat://buffer/" + quote(channel, safe="")
+                "event_history",
+                uri="weechat://buffer/" + quote(channel, safe=""),
+                **({"cursor": cursor} if cursor is not None else {}),
             )
         except ValueError:
             raise EventError(-32001, "Channel is not an exposed IRC channel") from None
@@ -360,6 +649,19 @@ class EventManager:
         except WebhookError:
             raise EventError(-32602, "Invalid webhook signing secret") from None
         cursor = self._parse_cursor(ident, params.get("cursor"))
+        recovery = params.get("recovery")
+        if recovery is not None and (
+            not isinstance(recovery, dict)
+            or set(recovery) - {"mode", "expectedIncarnation"}
+            or recovery.get("mode") not in ("prove", "resume")
+            or (
+                recovery.get("expectedIncarnation") is not None
+                and not re.fullmatch(
+                    r"[a-f0-9]{32}", str(recovery["expectedIncarnation"])
+                )
+            )
+        ):
+            raise EventError(-32602, "Invalid recovery policy")
         ttl = params.get("ttlMs", 3600000)
         if ttl is not None and (type(ttl) is not int or ttl <= 0):
             raise EventError(-32602, "ttlMs must be a positive integer or null")
@@ -376,6 +678,12 @@ class EventManager:
                 >= 100
             ):
                 raise EventError(-32000, "Event subscription limit reached")
+            if (
+                recovery
+                and recovery.get("expectedIncarnation")
+                and (not old or old["incarnation"] != recovery["expectedIncarnation"])
+            ):
+                raise EventError(-32000, "Subscription incarnation changed")
             if old and old["suspended"]:
                 raise EventError(
                     -32000,
@@ -393,6 +701,12 @@ class EventManager:
             old = self.db.execute(
                 "SELECT * FROM subscriptions WHERE id=?", (ident,)
             ).fetchone()
+            if (
+                recovery
+                and recovery.get("expectedIncarnation")
+                and (not old or old["incarnation"] != recovery["expectedIncarnation"])
+            ):
+                raise EventError(-32000, "Subscription incarnation changed")
             if old and old["suspended"]:
                 raise EventError(
                     -32000,
@@ -400,8 +714,40 @@ class EventManager:
                 )
             if old and cursor is not None and cursor > old["acknowledged"]:
                 raise EventError(-32602, "Cursor is ahead of acknowledged delivery")
+            # A numeric range is not an incarnation proof: same-ID recreation
+            # can later ACK past an old cursor. Require the exact retained receipt
+            # (AUTOINCREMENT positions are never reused), or a pinned incarnation.
+            continuity = bool(
+                old
+                and recovery
+                and recovery.get("expectedIncarnation") == old["incarnation"]
+            )
+            if (
+                old
+                and cursor is not None
+                and cursor > 0
+                and cursor <= old["acknowledged"]
+            ):
+                continuity = (
+                    continuity
+                    or self.db.execute(
+                        "SELECT 1 FROM outbox WHERE subscription=? AND position=? AND status IN ('sent','dropped')",
+                        (ident, cursor),
+                    ).fetchone()
+                    is not None
+                )
             with self.db:
                 if old:
+                    # Omitting the option is a real opt-out, not a sticky
+                    # grant to keep accepting historical loss indefinitely.
+                    self.db.execute(
+                        "UPDATE subscriptions SET recovery_mode=?,recovery_enrolled=MAX(recovery_enrolled,?) WHERE id=?",
+                        (
+                            recovery["mode"] if recovery else "off",
+                            int(bool(recovery)),
+                            ident,
+                        ),
+                    )
                     self.db.execute(
                         """UPDATE subscriptions SET secret=?,old_secret=?,rotate_until=?,expires=?,suspended=0 WHERE id=?""",
                         (
@@ -416,6 +762,52 @@ class EventManager:
                             ident,
                         ),
                     )
+                    current = self.db.execute(
+                        "SELECT * FROM subscriptions WHERE id=?", (ident,)
+                    ).fetchone()
+                    if (
+                        recovery
+                        and not recovery.get("expectedIncarnation")
+                        and "cursor" in params
+                        and not continuity
+                    ):
+                        # Enrollment with an absent/pruned legacy anchor needs an
+                        # honest gap decision. Never claim same-incarnation proof.
+                        boundary = json.loads(current["coverage_anchor"] or "{}")
+                        if not (
+                            current["coverage_state"] == "degraded"
+                            and boundary.get("enrollmentCursor", "missing") == cursor
+                        ):
+                            self._gap(
+                                current,
+                                "replay_pruned"
+                                if cursor is not None
+                                and 0 < cursor <= old["pruned_through"]
+                                else "legacy_unknown",
+                                latest,
+                            )
+                            boundary = json.loads(
+                                self.db.execute(
+                                    "SELECT coverage_anchor FROM subscriptions WHERE id=?",
+                                    (ident,),
+                                ).fetchone()[0]
+                            )
+                            boundary["enrollmentCursor"] = cursor
+                            self.db.execute(
+                                "UPDATE subscriptions SET coverage_anchor=? WHERE id=?",
+                                (canonical(boundary), ident),
+                            )
+                            self.db.execute(
+                                "UPDATE coverage_audit SET boundary=? WHERE subscription=? AND incarnation=? AND generation=(SELECT coverage_generation FROM subscriptions WHERE id=?)",
+                                (
+                                    canonical(boundary),
+                                    ident,
+                                    current["incarnation"],
+                                    ident,
+                                ),
+                            )
+                    elif cursor is not None and cursor < old["pruned_through"]:
+                        self._gap(current, "replay_pruned")
                     if cursor is not None and cursor < old["acknowledged"]:
                         self.db.execute(
                             "UPDATE subscriptions SET acknowledged=?,truncated=MAX(truncated,?) WHERE id=?",
@@ -426,7 +818,12 @@ class EventManager:
                             ),
                         )
                         self.db.execute(
-                            "UPDATE outbox SET status='pending',attempts=0,due=0 WHERE subscription=? AND position>? AND status!='dropped'",
+                            "UPDATE outbox SET status='pending',attempts=0,due=0 WHERE subscription=? AND position>? AND "
+                            + (
+                                "status='sent'"
+                                if recovery or old["recovery_mode"] != "off"
+                                else "status!='dropped'"
+                            ),
                             (ident, cursor),
                         )
                     self._ingest(ident, latest)
@@ -447,7 +844,7 @@ class EventManager:
                     if isinstance(last_assigned, int):
                         high = max(high, last_assigned + 1)
                     self.db.execute(
-                        """INSERT INTO subscriptions(id,owner,name,arguments,url,secret,expires,epoch,intake,truncated,seen_native_line) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                        """INSERT INTO subscriptions(id,owner,name,arguments,url,secret,expires,epoch,intake,truncated,seen_native_line,incarnation,recovery_mode,recovery_enrolled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
                             ident,
                             owner,
@@ -460,8 +857,18 @@ class EventManager:
                             high,
                             int(cursor is not None),
                             int(bool(snapshot["lines"])),
+                            secrets.token_hex(16),
+                            recovery["mode"] if recovery else "off",
+                            int(bool(recovery)),
                         ),
                     )
+            row = self.db.execute(
+                "SELECT * FROM subscriptions WHERE id=?", (ident,)
+            ).fetchone()
+            if row["truncated"] and row["coverage_generation"] == 0:
+                with self.db:
+                    self._gap(row, "legacy_unknown")
+            await self._reconcile(ident)
             row = self.db.execute(
                 "SELECT * FROM subscriptions WHERE id=?", (ident,)
             ).fetchone()
@@ -471,6 +878,7 @@ class EventManager:
                 "refreshBefore": utc(expires),
                 "cursor": self._cursor(ident, row["acknowledged"]),
                 "truncated": bool(row["truncated"]),
+                "coverage": self._coverage(row, continuity),
             }
 
     async def unsubscribe(self, owner, params):
@@ -488,6 +896,11 @@ class EventManager:
             "SELECT * FROM subscriptions WHERE id=?", (ident,)
         ).fetchone()
         if not row:
+            return
+        if row["recovery_mode"] != "off" and row["coverage_state"] in (
+            "gap",
+            "recovering",
+        ):
             return
         same_epoch = row["epoch"] == snapshot["epoch"]
         high = row["intake"]
@@ -514,6 +927,18 @@ class EventManager:
                 and retained_from > high
             )
         )
+        if truncated:
+            reason = (
+                "native_epoch_changed"
+                if not same_epoch
+                else "native_window_gap"
+                if snapshot.get("evicted_through", 0) > row["intake"]
+                and snapshot.get("next_cursor")
+                else "native_retention_gap"
+            )
+            self._gap(row, reason, snapshot)
+            if row["recovery_mode"] != "off":
+                return
         args = json.loads(row["arguments"])
         retained = self.db.execute(
             "SELECT COUNT(*) FROM outbox WHERE subscription=? AND status NOT IN ('sent','dropped')",
@@ -527,6 +952,7 @@ class EventManager:
                 high = seq
                 continue
             if retained >= 10000:
+                self._gap(row, "queue_capacity", snapshot)
                 truncated = True
                 self.db.execute(
                     "UPDATE subscriptions SET suspended=1 WHERE id=?", (ident,)
@@ -630,6 +1056,12 @@ class EventManager:
                 return
             with self.db:
                 self._ingest(row["id"], snapshots[buffer])
+            # Slow callback delivery must never block intake. Reconciliation
+            # is optional here and retries on the next wake if the lock is busy.
+            lock = self._lock(row["id"])
+            if not lock.locked():
+                async with lock:
+                    await self._reconcile(row["id"])
 
     async def deliver_once(self):
         now = self.clock()
@@ -647,7 +1079,10 @@ class EventManager:
                 "DELETE FROM outbox WHERE status IN ('sent','dropped') AND created<?",
                 (now - 86400,),
             )
-            self.db.execute("DELETE FROM subscriptions WHERE expires<?", (now - 86400,))
+            self.db.execute(
+                "DELETE FROM subscriptions WHERE expires<? AND recovery_enrolled=0",
+                (now - 86400,),
+            )
             for item in self.db.execute("SELECT id FROM subscriptions").fetchall():
                 cutoff = self.db.execute(
                     "SELECT position FROM outbox WHERE subscription=? AND status='sent' ORDER BY position DESC LIMIT 1 OFFSET 9999",
@@ -667,6 +1102,17 @@ class EventManager:
                             "DELETE FROM outbox WHERE subscription=? AND status IN ('sent','dropped') AND position<=?",
                             (item["id"], removed),
                         )
+        # Retry one due coverage reconciliation per scheduler round, even if no
+        # further channel messages arrive. No writes occur before its due time.
+        retry = self.db.execute(
+            "SELECT id FROM subscriptions WHERE expires>? AND recovery_mode!='off' AND coverage_state IN ('gap','recovering') AND recovery_due<=? ORDER BY recovery_due,id LIMIT 1",
+            (now, now),
+        ).fetchone()
+        if retry:
+            lock = self._lock(retry["id"])
+            if not lock.locked():
+                async with lock:
+                    await self._reconcile(retry["id"])
         rows = self.db.execute(
             "SELECT id FROM subscriptions WHERE expires>? AND suspended=0", (now,)
         ).fetchall()
@@ -678,7 +1124,10 @@ class EventManager:
                 "SELECT * FROM subscriptions WHERE id=? AND expires>? AND suspended=0",
                 (ident, self.clock()),
             ).fetchone()
-            if sub is None:
+            if sub is None or (
+                sub["recovery_mode"] != "off"
+                and sub["coverage_state"] in ("gap", "recovering")
+            ):
                 return
             if not self.owner_allowed(sub["owner"]):
                 with self.db:
@@ -788,7 +1237,11 @@ class EventManager:
             headers = signed_headers(
                 event["eventId"], body, keys, sub["id"], int(self.clock())
             )
-            if pending["attempts"] >= 8:
+            automatic = sub["recovery_mode"] != "off"
+            if pending["attempts"] >= 8 and (
+                not automatic
+                or pending["failure_class"] not in ("transient", "inflight")
+            ):
                 with self.db:
                     self.db.execute(
                         "UPDATE outbox SET status='failed' WHERE position=?",
@@ -802,8 +1255,14 @@ class EventManager:
             # Count before I/O, including crashes with uncertain receipt.
             with self.db:
                 self.db.execute(
-                    "UPDATE outbox SET attempts=? WHERE position=?",
-                    (attempts, pending["position"]),
+                    "UPDATE outbox SET attempts=?,due=?,failure_class='inflight' WHERE position=?",
+                    (
+                        attempts,
+                        self.clock() + min(900, 2 ** min(attempts, 10))
+                        if automatic
+                        else pending["due"],
+                        pending["position"],
+                    ),
                 )
             reason = None
             try:
@@ -813,7 +1272,7 @@ class EventManager:
             with self.db:
                 if 200 <= status < 300:
                     self.db.execute(
-                        "UPDATE outbox SET status='sent' WHERE position=?",
+                        "UPDATE outbox SET status='sent',failure_class=NULL WHERE position=?",
                         (pending["position"],),
                     )
                     self.db.execute(
@@ -827,14 +1286,18 @@ class EventManager:
                         status == 0
                         and reason in ("timeout", "dns_error", "connection_failed")
                     )
-                ) and attempts < 8:
+                ) and (attempts < 8 or automatic):
                     self.db.execute(
-                        "UPDATE outbox SET due=? WHERE position=?",
-                        (self.clock() + min(300, 2**attempts), pending["position"]),
+                        "UPDATE outbox SET due=?,failure_class='transient' WHERE position=?",
+                        (
+                            self.clock()
+                            + min(900 if automatic else 300, 2 ** min(attempts, 10)),
+                            pending["position"],
+                        ),
                     )
                 else:
                     self.db.execute(
-                        "UPDATE outbox SET status='failed' WHERE position=?",
+                        "UPDATE outbox SET status='failed',failure_class='permanent' WHERE position=?",
                         (pending["position"],),
                     )
                     self.db.execute(
@@ -871,7 +1334,7 @@ class EventManager:
                 return
             ready = self.db.execute(
                 """SELECT 1 FROM subscriptions s JOIN outbox o ON o.subscription=s.id
-                WHERE s.expires>? AND s.suspended=0 AND o.status='pending' AND o.due<=?
+                WHERE s.expires>? AND s.suspended=0 AND (s.recovery_mode='off' OR s.coverage_state NOT IN ('gap','recovering')) AND o.status='pending' AND o.due<=?
                 AND o.position=(SELECT MIN(position) FROM outbox WHERE subscription=s.id AND status NOT IN ('sent','dropped'))
                 LIMIT 1""",
                 (self.clock(), self.clock()),
