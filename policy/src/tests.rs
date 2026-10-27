@@ -236,3 +236,63 @@ fn c_abi_load_authorize_and_free_roundtrip() {
         weechat_managed_policy_free(p);
     }
 }
+
+#[test]
+fn public_http_requires_explicit_boolean_and_retains_method_allowlist() {
+    let source = include_bytes!("../managed.rego");
+    for enabled in [json!(false), json!(null), json!("true"), json!(1)] {
+        let data = json!({"managed":{"buffers":[],"http_methods":["GET"],"http_hosts":[],"public_http":enabled,"log":false}});
+        let p = load(source, &serde_json::to_vec(&data).unwrap()).unwrap();
+        assert_eq!(decide(&p, &input("http.request")), DENY);
+    }
+    let data = json!({"managed":{"buffers":[],"http_methods":["GET"],"http_hosts":[],"public_http":true,"log":false}});
+    let p = load(source, &serde_json::to_vec(&data).unwrap()).unwrap();
+    assert_eq!(decide(&p, &input("http.request")), ALLOW);
+    for method in ["POST", "PUT", "DELETE", "HEAD", "CONNECT"] {
+        let mut value = input("http.request");
+        value["request"]["method"] = json!(method);
+        assert_eq!(decide(&p, &value), DENY);
+    }
+    let data = json!({"managed":{"buffers":[],"http_methods":["CONNECT"],"http_hosts":[],"public_http":true,"log":false}});
+    let p = load(source, &serde_json::to_vec(&data).unwrap()).unwrap();
+    let mut value = input("http.request");
+    value["request"]["method"] = json!("CONNECT");
+    assert_eq!(decide(&p, &value), DENY);
+}
+
+#[test]
+fn cuse2_opt_in_policy_is_exact_channel_no_logs_or_trust_expansion() {
+    let p = load(
+        include_bytes!("../managed.rego"),
+        include_bytes!("../cuse2-public-data.json"),
+    )
+    .unwrap();
+    for method in ["GET", "POST", "PUT", "DELETE"] {
+        let mut value = input("http.request");
+        value["request"]["method"] = json!(method);
+        value["request"]["host"] = json!("another.public.example");
+        assert_eq!(decide(&p, &value), ALLOW);
+        value["phase"] = json!("staging");
+        assert_eq!(decide(&p, &value), DENY);
+        value["phase"] = json!("active");
+        value["principal"]["trust"] = json!("trusted");
+        assert_eq!(decide(&p, &value), DENY);
+    }
+    for operation in ["event.receive", "irc.send"] {
+        let mut value = input(operation);
+        value["resource"]["buffer"] = json!("irc.docker.#cuse2");
+        assert_eq!(decide(&p, &value), ALLOW);
+        for buffer in [
+            "irc.docker.#private",
+            "irc.docker.nickname",
+            "python.fake.channel",
+            "irc.other.#cuse2",
+        ] {
+            value["resource"]["buffer"] = json!(buffer);
+            assert_eq!(decide(&p, &value), DENY);
+        }
+    }
+    for operation in ["log", "exec", "command", "policy.set"] {
+        assert_eq!(decide(&p, &input(operation)), DENY);
+    }
+}

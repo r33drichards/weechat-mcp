@@ -271,6 +271,11 @@ public:
     std::deque<Job> jobs;
     std::map<std::string, Pending> pending;
     std::map<std::string, Scheduled> timers;
+    // JSON-safe, saturating per-generation telemetry. Never exposed to JS.
+    static constexpr uint64_t COUNTER_MAX = 9007199254740991ULL;
+    uint64_t timer_callbacks_started = 0, timer_callbacks_completed = 0, timer_callbacks_failed = 0;
+    static void count(uint64_t &value) { if (value < COUNTER_MAX) ++value; }
+
 
     Managed(std::string id, std::string revision) : name(std::move(id)), digest(std::move(revision)), generation(++next_generation) {
         // Reuse the existing plugin's single-threaded V8 platform, not Node.js.
@@ -407,6 +412,7 @@ public:
             "{\"nick\":" + quote(job.nick) + ",\"text\":" + quote(job.text) + "}")) return;
         invocations.push_back(now);
         current_buffer = job.buffer;
+        bool timer_invoked = false;
         bool ok = evaluate([&](Local<Context> ctx) {
             Local<Function> callback;
             Local<Value> argument;
@@ -424,6 +430,8 @@ public:
                 found->second.due = false;
                 if (!found->second.repeat) cancel_timer(job.id);
                 Local<Value> result;
+                timer_invoked = true;
+                count(timer_callbacks_started);
                 return callback->Call(ctx, Undefined(isolate), 0, nullptr).ToLocal(&result);
             } else {
                 auto found = pending.find(job.id);
@@ -438,6 +446,7 @@ public:
             return callback->Call(ctx, Undefined(isolate), 1, &argument).ToLocal(&result);
         });
         current_buffer.clear();
+        if (timer_invoked) count(ok ? timer_callbacks_completed : timer_callbacks_failed);
         if (ok) drain();
         else if (!active) {
             retire();
@@ -666,7 +675,11 @@ t_hashtable *manager(const void *, void *, const char *operation, t_hashtable *i
             for (const auto &[name, plugin] : plugins) {
                 if (json.size() > 1) json += ',';
                 json += "{\"name\":" + quote(name) + ",\"digest\":" + quote(plugin->digest) +
-                    ",\"generation\":" + std::to_string(plugin->generation) + ",\"active\":" + (plugin->active ? "true" : "false") + "}";
+                    ",\"generation\":" + std::to_string(plugin->generation) + ",\"active\":" + (plugin->active ? "true" : "false") +
+                    ",\"timers\":{\"live\":" + std::to_string(plugin->timers.size()) +
+                    ",\"callbacks_started\":" + std::to_string(plugin->timer_callbacks_started) +
+                    ",\"callbacks_completed\":" + std::to_string(plugin->timer_callbacks_completed) +
+                    ",\"callbacks_failed\":" + std::to_string(plugin->timer_callbacks_failed) + "}}";
             }
             return table({{"ok", "1"}, {"plugins", json + "]"}});
         }

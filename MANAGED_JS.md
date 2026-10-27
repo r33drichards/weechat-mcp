@@ -110,13 +110,51 @@ policy/data immutably in the Nix store and sources separately under
 whole-service memory/task ceilings. Existing trusted scripts may be explicitly
 loaded through operator-only startup configuration.
 
+## Explicit Cuse2 public-HTTP/channel policy preset
+
+Defaults remain deny-all. `policy/cuse2-public-data.json` is an **operator opt-in**
+preset, not the image default. It permits GET, POST, PUT and DELETE to public
+HTTP(S) destinations and incoming channel events/literal sends only for
+`irc.docker.#cuse2`. Logging stays disabled. It grants every managed script in
+this one source root the same ceiling; script names are not separate identities.
+The independent WeeChat MCP `buffers` allowlist must also expose that exact native
+IRC channel. Other joined channels (including secret/invite-only channels), DMs
+and custom buffers are not included. No join/part/history-read API is introduced.
+
+`managed.public_http` must be literal `true`, and methods must still be listed
+in `managed.http_methods`. When absent or false, the existing exact
+`managed.http_hosts` allowlist continues unchanged. This policy choice does not
+replace the mandatory trusted HTTP adapter checks: all DNS answers must be
+public, the selected address is pinned, redirects/proxies/implicit credentials
+remain disabled, and existing size/deadline/rate limits apply. Public HTTP is
+not arbitrary sockets, WebSocket, unrestricted headers or permission to contact
+internal/private addresses. Mutating requests are never automatically replayed.
+
+After reviewing and explicitly approving this effect expansion, an operator of
+the Nix image can set `WEECHAT_MANAGED_DATA` to the canonical sibling
+`cuse2-public-data.json` of its existing `WEECHAT_MANAGED_POLICY` path. The image
+uses the tracked flake source (`sourceRoot = self`) for that immutable policy
+path, so this file travels with the same reviewed source. Resolve and verify the
+actual path in the deployed image; do not use a guessed store hash or a symlink
+alias. Keep `WEECHAT_MCP_FULL_CONTROL=0`, retain the existing policy path, source
+root, buffer allowlist and credentials, and restart to load the reviewed data.
+To revoke effects, restore the previous deny-all data path and restart; this
+cannot undo an already-dispatched network mutation or IRC message.
+
+Managed JS receives no process/command/filesystem/plugin-loading API. The
+trusted HTTP implementation still uses the existing fixed forked DNS helper
+(`func:managed_dns_worker`, no exec); scripts cannot select a program or command.
+This is a capability boundary, not a claim that no host child process exists or
+that native/V8 bugs are impossible. Trusted host plugins remain outside the
+managed-script boundary. No full-control or generic logging grant is needed.
+
 ## Scoped edit, validate and hot-activate
 
 The new tools are present only when managed mode successfully initializes:
 
 | Tool | Arguments / result |
 | --- | --- |
-| `weechat_managed_script_status` | `{}` → available names and native generations |
+| `weechat_managed_script_status` | `{}` → available names, native generations and timer counters |
 | `weechat_managed_script_read` | `{name}` → source and SHA-256 digest |
 | `weechat_managed_script_write` | `{name, source, expected_digest}` → new digest; no activation. Empty digest creates a new file. |
 | `weechat_managed_script_validate` | `{name, digest}` → stage/validate without replacing active generation |
@@ -235,6 +273,29 @@ creating an unbounded backlog. Timer callbacks share the existing dispatch
 queue, per-generation callback rate and **50 ms execution deadline**, including
 microtasks. A timer does not grant send, HTTP or logging permission: effects
 still cross the same independent policy checks and resource limits.
+
+### Read-only timer observability
+
+Each native generation in `weechat_managed_script_status().active` includes a
+`timers` object: `live`, `callbacks_started`, `callbacks_completed`, and
+`callbacks_failed`. `live` is the number of currently registered timers;
+`started` counts actual JavaScript callback invocations, not native ticks or
+queued/coalesced notifications. Completion means the callback and its microtask
+evaluation succeeded; it does **not** prove that queued effects were authorized
+or delivered. A thrown exception or execution deadline counts as a failed
+callback. Canceled/stale callbacks that never run do not increment these counts.
+
+Counts reset for each newly activated generation, persist only for that native
+generation's lifetime, and saturate at JavaScript's maximum safe integer
+(9,007,199,254,740,991). Validation/rejected candidates never change the active
+generation's counters. Status does not expose callback source, captured globals,
+message bodies, or credentials, and reading it performs no script operation.
+
+A script such as `setTimeout(() => {}, 100); weechat.onMessage(() => {});` can be
+written, validated and activated, then observed through status until
+`callbacks_completed` reaches one. This proves timer callback execution while
+retaining deny-all log, channel, event-intake and network effect policy. Timers
+are bounded runtime functionality, not new effect permissions.
 
 Delays are scheduling requests, not precise deadlines or delivery guarantees.
 WeeChat runs timers on its event loop and may catch up missed native intervals

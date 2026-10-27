@@ -47,7 +47,10 @@ these interfaces or to arbitrary WeeChat info/configuration/command APIs.
   `name`, `source`, SHA-256 `digest`; result `ok=1`, `digest`, `generation`, or
   stable `error`. Names begin with an ASCII alphanumeric and contain at most 48
   ASCII alphanumerics, underscores or hyphens. Sources are at most 64 KiB.
-- `javascript_managed_status`: result `ok=1`, `plugins` JSON.
+- `javascript_managed_status`: result `ok=1`, `plugins` JSON, including per-generation
+  `timers.live` and saturating `callbacks_started`, `callbacks_completed`,
+  `callbacks_failed` counts. These are read-only execution observations, not
+  effect-authorization or delivery receipts.
 - `javascript_managed_message`: trusted input `buffer`, `nick`, `text`; queued
   per generation and independently gated by `event.receive` policy.
 - `javascript_managed_http_complete`: trusted input `id`, `response_json`.

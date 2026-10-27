@@ -34,6 +34,16 @@ allow if {
     input.request.host in grant.http_hosts
 }
 
+# Operator opt-in only. Public-address enforcement is mandatory in the trusted
+# HTTP adapter after DNS resolution; this rule does not replace that boundary.
+allow if {
+    active
+    input.operation == "http.request"
+    grant.public_http == true
+    input.request.method in grant.http_methods
+    input.request.method in {"GET", "POST", "PUT", "DELETE"}
+}
+
 allow if {
     active
     input.operation == "log"

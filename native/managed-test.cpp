@@ -141,6 +141,66 @@ static void readonly(const std::filesystem::path &path, const std::string &text)
 }
 
 
+// Counters are observable under deny-all policy: no log/send/network permission.
+static void assert_timer_status(size_t live, uint64_t started, uint64_t completed, uint64_t failed) {
+    const auto status = call("javascript_managed_status");
+    const auto expected = "\"timers\":{\"live\":" + std::to_string(live) +
+        ",\"callbacks_started\":" + std::to_string(started) +
+        ",\"callbacks_completed\":" + std::to_string(completed) +
+        ",\"callbacks_failed\":" + std::to_string(failed) + "}";
+    assert(status.at("ok") == "1" && status.at("plugins").find(expected) != std::string::npos);
+}
+static void timer_observability_tests() {
+    const auto before_sends = sends.size(), before_requests = requests.size();
+    activate("setTimeout(()=>{},100); weechat.onMessage(()=>{});");
+    assert_timer_status(1, 0, 0, 0);
+    auto hook = managed_hooks().front();
+    fire_timer(hook);
+    assert_timer_status(1, 0, 0, 0); // A native tick is not a callback execution.
+    dispatch_timer();
+    assert_timer_status(0, 1, 1, 0);
+    assert(call("javascript_managed_status") == call("javascript_managed_status"));
+
+    activate("let n=0;const id=setInterval(()=>{if(++n===2)clearInterval(id);},100);weechat.onMessage(()=>{});");
+    assert_timer_status(1, 0, 0, 0); // Replacement is a new generation.
+    hook = managed_hooks().front();
+    for (int i = 0; i < 5; ++i) fire_timer(hook);
+    dispatch_timer(); assert_timer_status(1, 1, 1, 0); // Coalesced ticks.
+    fire_timer(hook); dispatch_timer(); assert_timer_status(0, 2, 2, 0);
+    const auto last_good = call("javascript_managed_status");
+    activate("setTimeout(()=>{},100); throw Error('candidate rejected');", false);
+    assert(call("javascript_managed_status") == last_good);
+    next_candidate = Clock::time_point{};
+    assert(call("javascript_managed_validate", {{"name", "validated"},
+        {"source", "setTimeout(()=>{},100);weechat.onMessage(()=>{});"},
+        {"digest", std::string(64, 'a')}})["ok"] == "1");
+    assert(call("javascript_managed_status") == last_good);
+
+    activate("const id=setTimeout(()=>{throw Error('must not run');},100);clearTimeout(id);weechat.onMessage(()=>{});");
+    dispatch_timer(); assert_timer_status(0, 0, 0, 0);
+    activate("setTimeout(()=>{},100);weechat.onMessage(()=>{});");
+    fire_timer(managed_hooks().front());
+    activate("weechat.onMessage(()=>{});");
+    dispatch_timer(); assert_timer_status(0, 0, 0, 0); // Old queued callback revoked.
+
+    activate("setTimeout(()=>{throw Error('failure');},100);weechat.onMessage(()=>{});");
+    fire_timer(managed_hooks().front()); dispatch_timer(); assert_timer_status(0, 1, 0, 1);
+    activate("setInterval(()=>{while(true){}},100);weechat.onMessage(()=>{});");
+    fire_timer(managed_hooks().front()); dispatch_timer(); assert_timer_status(0, 1, 0, 1);
+    assert(!plugins.at("example")->active);
+
+    activate("setInterval(()=>{},100);weechat.onMessage(()=>{});");
+    auto owner = plugins.at("example");
+    owner->timer_callbacks_started = Managed::COUNTER_MAX - 1;
+    owner->timer_callbacks_completed = Managed::COUNTER_MAX - 1;
+    hook = managed_hooks().front();
+    fire_timer(hook); dispatch_timer();
+    fire_timer(hook); dispatch_timer();
+    assert_timer_status(1, Managed::COUNTER_MAX, Managed::COUNTER_MAX, 0);
+    assert(sends.size() == before_sends && requests.size() == before_requests);
+    activate("weechat.onMessage(()=>{});");
+}
+
 static void timer_tests() {
     size_t before = sends.size();
     size_t registrations = timer_registrations;
@@ -258,6 +318,14 @@ int main(int argc, char **argv) {
     setenv("WEECHAT_MANAGED_ROOT", (root / "sources").c_str(), 1);
     setenv("WEECHAT_MANAGED_POLICY", (root / "policy.rego").c_str(), 1);
     setenv("WEECHAT_MANAGED_DATA", (root / "data.json").c_str(), 1);
+    // Exercise status-only timer proof without granting any script effects.
+    std::filesystem::remove(root / "data.json");
+    readonly(root / "data.json", R"({"managed":{"buffers":[],"http_methods":[],"http_hosts":[],"log":false}})");
+    assert(weechat_js_managed_init());
+    timer_observability_tests();
+    weechat_js_managed_end();
+    std::filesystem::remove(root / "data.json");
+    readonly(root / "data.json", R"({"managed":{"buffers":["irc.test.#allowed"],"http_methods":["GET"],"http_hosts":["example.com"],"log":true}})");
     assert(weechat_js_managed_init());
     timer_tests();
     sends.clear();
