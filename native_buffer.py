@@ -219,9 +219,9 @@ class NativeBuffers:
             raise ValueError("Native buffer metadata exceeds the response budget")
         return result
 
-    def event_snapshot(self, name, pointer):
+    def event_snapshot(self, name, pointer, cursor=None):
         """Bounded private consumer snapshot; IDs/watermarks are per buffer."""
-        snapshot = self.snapshot(name, pointer, MAX_LINES)
+        snapshot = self.snapshot(name, pointer, MAX_LINES, cursor)
         nick = self.w.buffer_get_string(pointer, "localvar_nick")
 
         def fold(value):
@@ -268,6 +268,7 @@ class NativeBuffers:
             "native_retained_from": snapshot["oldest_available_id"],
             "returned": len(rows),
             "truncated": snapshot["has_more"],
+            "next_cursor": snapshot["next_cursor"],
         }
         if len(json.dumps(result).encode()) > MAX_RESPONSE_BYTES:
             raise ValueError("Native event data exceeds the response budget")

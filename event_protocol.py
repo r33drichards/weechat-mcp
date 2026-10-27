@@ -54,12 +54,22 @@ class ListEventsParams(_EventParams):
     cursor: str | None = None
 
 
+class RecoveryOptions(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
+
+    mode: Literal["prove", "resume"]
+    expected_incarnation: str | None = Field(
+        default=None, alias="expectedIncarnation", pattern=r"^[a-f0-9]{32}$"
+    )
+
+
 class SubscribeEventParams(_EventParams):
     name: str
     arguments: dict[str, Any]
     delivery: SubscribeDelivery
     cursor: str | None = None
     ttl_ms: int | None = Field(default=None, alias="ttlMs", gt=0)
+    recovery: RecoveryOptions | None = None
 
 
 class UnsubscribeEventParams(_EventParams):

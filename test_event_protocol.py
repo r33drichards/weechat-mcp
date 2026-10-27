@@ -102,6 +102,24 @@ class EventProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.server.tool(lambda value: value, name="echo")
         install_event_protocol(self.server, self.manager, lambda: self.principal)
 
+    async def test_explicit_recovery_option_survives_wire_and_rejects_force_policy(
+        self,
+    ):
+        recovery = {"mode": "resume", "expectedIncarnation": "a" * 32}
+        async with Client(self.server) as client:
+            await request(client, "events/subscribe", {**PARAMS, "recovery": recovery})
+            self.assertEqual(self.manager.calls[-1][2]["recovery"], recovery)
+            for invalid in [
+                {"mode": "force"},
+                {"mode": "prove", "clear": True},
+                {"mode": "prove", "expectedIncarnation": "invalid"},
+            ]:
+                with self.assertRaises(MCPError):
+                    await request(
+                        client, "events/subscribe", {**PARAMS, "recovery": invalid}
+                    )
+        self.assertEqual(len(self.manager.calls), 1)
+
     async def test_discovery_preserves_existing_capabilities_and_tools(self):
         async with Client(self.server) as client:
             result = await client.session.send_discover("2026-07-28")
